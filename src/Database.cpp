@@ -55,11 +55,15 @@ bool Database::rollbackTransaction() {
       install_script TEXT
     );
 
-    -- Note: dependency column has no foreign key constraint
-    -- so we can delete the referenced package row freely.
     CREATE TABLE IF NOT EXISTS dependencies (
       package    TEXT NOT NULL,
       dependency TEXT NOT NULL,
+      FOREIGN KEY(package) REFERENCES packages(name) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS provides (
+      package  TEXT NOT NULL,
+      provided TEXT NOT NULL,
       FOREIGN KEY(package) REFERENCES packages(name) ON DELETE CASCADE
     );
 
@@ -73,7 +77,6 @@ bool Database::rollbackTransaction() {
       name TEXT PRIMARY KEY
     );
     )";
-
     char* err = nullptr;
     bool ok = sqlite3_exec(db_, sql, nullptr, nullptr, &err) == SQLITE_OK;
     if (!ok) {
@@ -122,8 +125,50 @@ bool Database::addPackage(const Package::Metadata& meta,
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
     }
-
+    if (!addProvides(meta)) return false;
     return true;
+}
+
+    bool Database::addProvides(const Package::Metadata& meta) {
+    sqlite3_stmt* stmt = nullptr;
+    // 1) delete old provides for this package
+    if (sqlite3_prepare_v2(db_,
+          "DELETE FROM provides WHERE package = ?;", -1, &stmt, nullptr) != SQLITE_OK)
+        return false;
+    sqlite3_bind_text(stmt, 1, meta.name.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    // 2) insert each provided name
+    const char* sql = "INSERT INTO provides(package, provided) VALUES(?,?);";
+    for (auto const& prov : meta.provides) {
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
+            return false;
+        sqlite3_bind_text(stmt, 1, meta.name.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, prov.c_str(),       -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) != SQLITE_DONE) {
+            sqlite3_finalize(stmt);
+            return false;
+        }
+        sqlite3_finalize(stmt);
+    }
+    return true;
+}
+
+    bool Database::isProvided(const std::string& name) const {
+    sqlite3_stmt* stmt = nullptr;
+    bool result = false;
+    if (sqlite3_prepare_v2(db_,
+          "SELECT 1 FROM provides WHERE provided = ? LIMIT 1;", -1, &stmt, nullptr)
+        == SQLITE_OK)
+    {
+        sqlite3_bind_text(stmt, 1, name.c_str(), -1, SQLITE_TRANSIENT);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            result = true;
+        }
+        sqlite3_finalize(stmt);
+    }
+    return result;
 }
 
 std::vector<std::string> Database::getReverseDependencies(const std::string& pkg) {

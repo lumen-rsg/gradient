@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <cstdlib>
 #include <iostream>
+#include <unordered_set>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -18,13 +19,15 @@ namespace anemo {
 Installer::Installer(Database& db,
                      Repository& repo,
                      bool force,
-                     const std::string& rootDir)
+                     const std::string& rootDir,
+                     const std::unordered_set<std::string>& staged)
     : db_(db)
     , repo_(repo)
     , resolver_(db, repo)
     , force_(force)
     , rootDir_(rootDir)
     , warnings_(false)
+    , staged_ (staged)
 {}
 
 std::string Installer::detectHostArch() {
@@ -58,11 +61,37 @@ bool Installer::installArchive(const std::string& archivePath) {
         return false;
     }
 
-    // 3) Dependencies check
-    for (const auto& dep : meta.deps) {
+    // 3) Dependencies check (skip anything in meta.provides, skip SONAMEs)
+    for (const auto& raw_dep : meta.deps) {
+        // Strip off any version specifier (e.g. "foo=1.2" → "foo")
+        std::string dep = raw_dep;
+        if (auto eq = dep.find('='); eq != std::string::npos) {
+            dep.resize(eq);
+        }
+        // If this package itself Provides it, we're good
+        if (std::find(meta.provides.begin(),
+                      meta.provides.end(),
+                      dep) != meta.provides.end())
+        {
+            continue;
+        }
+        // Skip SONAME deps (we don't treat .so names as package names here)
+        if (dep.size() > 3 && dep.substr(dep.size()-3) == ".so") {
+            continue;
+        }
+
+        if (db_.isProvided(dep)) {
+            continue;
+        }
+
+        if (staged_.count(dep)) {
+            continue;
+        }
+
+        // Otherwise it must be installed
         if (!db_.isInstalled(dep, "")) {
             std::cerr << "\033[33mwarning:\033[0m Missing dependency '"
-                      << dep << "'.\n";
+                      << raw_dep << "'.\n";
             if (!force_) {
                 std::cerr << "\033[31merror:\033[0m Aborting due to missing dependency.\n";
                 return false;

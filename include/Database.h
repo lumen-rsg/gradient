@@ -28,6 +28,8 @@ namespace anemo {
         // Install
         bool addPackage(const Package::Metadata& meta,
                         const std::string& installScriptPath);
+        bool addProvides(const Package::Metadata& meta);
+        bool isProvided(const std::string& name) const;
 
         // Removal support
         std::vector<std::string> getReverseDependencies(const std::string& packageName);

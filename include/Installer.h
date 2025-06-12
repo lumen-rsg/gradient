@@ -6,6 +6,8 @@
 #define INSTALLER_H
 
 #include <string>
+#include <unordered_set>
+
 #include "Database.h"
 #include "Repository.h"
 #include "DependencyResolver.h"
@@ -17,7 +19,8 @@ namespace anemo {
         Installer(Database& db,
                   Repository& repo,
                   bool force = false,
-                  const std::string& rootDir = "/");
+                  const std::string& rootDir = "/",
+                  const std::unordered_set<std::string>& staged = {});
 
         // Install a standalone .apkg archive
         bool installArchive(const std::string& archivePath);
@@ -43,6 +46,7 @@ namespace anemo {
         // Helpers
         std::string detectHostArch();
         std::string makeTempDir();
+        std::unordered_set<std::string> staged_;
     };
 
 } // namespace anemo

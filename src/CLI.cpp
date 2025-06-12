@@ -110,6 +110,7 @@ void CLI::run() {
     }
 
     else if (cmd == "install") {
+        static std::mutex cout_mtx;
     // 1) Locate repos base directory
         fs::path repoBase = fs::path("/var/lib/anemo/repos");
         if (!fs::exists(repoBase) || !fs::is_directory(repoBase)) {
@@ -128,6 +129,7 @@ void CLI::run() {
     struct RepoPkg {
         std::string pkgname, pkgver, arch, filename, repoUrl;
         std::vector<std::string> depends;
+        std::vector<std::string> provides;
         int priority;
         std::string repoName;
     };
@@ -161,7 +163,6 @@ void CLI::run() {
         auto packages = idx["packages"];
         if (!packages || !packages.IsSequence()) continue;
 
-        // Register each package entry
         for (const auto& node : packages) {
             RepoPkg rp;
             rp.pkgname   = node["pkgname"].as<std::string>();
@@ -172,132 +173,183 @@ void CLI::run() {
             rp.priority  = priority;
             rp.repoName  = repoName;
 
+            // Dependencies
             if (node["depends"]) {
-                for (auto& d : node["depends"])
-                    rp.depends.push_back(d.as<std::string>());
+                for (const auto& dnode : node["depends"])
+                    rp.depends.push_back(dnode.as<std::string>());
             }
-            pkgMap[rp.pkgname].push_back(std::move(rp));
+
+            // Provides (strip version suffix after '=')
+            if (node["provides"]) {
+                for (const auto& pnode : node["provides"]) {
+                    std::string prov = pnode.as<std::string>();
+                    if (auto eq = prov.find('='); eq != std::string::npos)
+                        prov.resize(eq);
+                    rp.provides.push_back(prov);
+                }
+            }
+
+            // 1) Always index under its real name
+            pkgMap[rp.pkgname].push_back(rp);
+
+            // 2) Also index under each provided name, but skip the case prov==pkgname
+            for (const auto& prov : rp.provides) {
+                if (prov == rp.pkgname)
+                    continue;    // <-- this line avoids self‐cycle on "libcap"
+                pkgMap[prov].push_back(rp);
+            }
         }
     }
 
     // 3) Resolve dependencies (DFS, picking highest-priority entries)
-    std::vector<RepoPkg> installOrder;
-    std::unordered_set<std::string> visited, inStack;
-    std::function<bool(const std::string&)> dfs;
-    dfs = [&](auto const& name) -> bool {
-        if (visited.count(name)) return true;
-        auto it = pkgMap.find(name);
-        if (it == pkgMap.end()) {
-            std::cerr << "\033[31merror:\033[0m package '" << name
-                      << "' not found in any repo\n";
-            return false;
-        }
-        // pick best entry by priority (higher first), then lex ver
-        auto& candidates = it->second;
-        std::sort(candidates.begin(), candidates.end(),
-                  [](auto const& a, auto const& b){
-                      if (a.priority != b.priority)
-                          return a.priority > b.priority;
-                      return a.pkgver > b.pkgver;
-                  });
-        const RepoPkg& best = candidates[0];
+        std::vector<RepoPkg> installOrder;
+        std::unordered_set<std::string> visited, inStack;
+        auto dfs = [&](auto& self, const std::string& pkgName) -> bool {
+            if (visited.count(pkgName))
+                return true;
 
-        // detect cycles
-        if (inStack.count(name)) {
-            std::cerr << "\033[31merror:\033[0m cyclic dependency detected on '"
-                      << name << "'\n";
-            return false;
-        }
-        inStack.insert(name);
-
-        // resolve each dependency
-        for (auto const& dep : best.depends) {
-            if (!db.isInstalled(dep, "")) {
-                if (!dfs(dep)) return false;
+            auto it = pkgMap.find(pkgName);
+            if (it == pkgMap.end()) {
+                std::cerr << "\033[31merror:\033[0m package '" << pkgName
+                          << "' not found in any repo\n";
+                return false;
             }
-        }
 
-        inStack.erase(name);
-        visited.insert(name);
-        installOrder.push_back(best);
-        return true;
-    };
+            // choose best candidate: highest priority, then lexicographically greatest version
+            auto& candidates = it->second;
+            std::sort(candidates.begin(), candidates.end(),
+                [](auto const& a, auto const& b){
+                    return (a.priority != b.priority)
+                           ? a.priority > b.priority
+                           : a.pkgver   > b.pkgver;
+                });
+            const RepoPkg& best = candidates[0];
 
-    // Kick off resolution for each requested package
-    for (auto const& name : args) {
-        if (!db.isInstalled(name, "")) {
-            if (!dfs(name)) return;
+            // mark entry into recursion stack
+            inStack.insert(pkgName);
+
+            // resolve dependencies
+            for (auto const& dep : best.depends) {
+                // 1) skip defunct SONAMEs
+                if (dep.find(".so") != std::string::npos) continue;
+                // 2) skip self‐depend
+                if (dep == pkgName) continue;
+                // 3) skip and warn on any cycle
+                if (inStack.count(dep)) {
+                    std::lock_guard<std::mutex> lk(cout_mtx);
+                    std::cout << "  \033[33mwarning:\033[0m detected cycle on '"
+                              << dep << "', skipping\n";
+                    continue;
+                }
+                // 4) recurse if not already satisfied or visited
+                if (!db.isInstalled(dep, "") && !self(self, dep))
+                    return false;
+            }
+
+            // unwound from recursion
+            inStack.erase(pkgName);
+            visited.insert(pkgName);
+            installOrder.push_back(best);
+            return true;
+        };
+
+        // Kick off for each requested package
+        for (auto const& name : args) {
+            if (!db.isInstalled(name, "") && !dfs(dfs, name))
+                return;
         }
-    }
 
     if (installOrder.empty()) {
         std::cout << "\033[32minfo:\033[0m all requested packages are already installed\n";
         return;
     }
-
-    // 4) Parallel download of all needed .apkg files
-        static std::mutex cout_mtx;
-
-        std::cout << "\033[1;34m🚀 Downloading " << installOrder.size()
-                  << " packages in parallel...\033[0m\n";
-
         fs::path tmp = fs::temp_directory_path() / "anemo_pkgs";
-        fs::create_directories(tmp);
-        size_t N = installOrder.size();
 
-        std::vector<std::future<bool>> futures;
-        futures.reserve(N);
+std::atomic<size_t> completed{0};
+const size_t total = installOrder.size();
+const size_t barWidth = 30;
 
-        for (size_t i = 0; i < N; ++i) {
-            const auto& p = installOrder[i];
-            futures.push_back(std::async(std::launch::async, [&, i]() {
-                auto url = p.repoUrl + "/" + p.filename;
-                auto out = tmp / p.filename;
+// Print initial progress bar at 0%
+{
+    std::lock_guard<std::mutex> lk(cout_mtx);
+    std::cout << "  Progress: ["
+              << std::string(barWidth, ' ')
+              << "] 0%\r" << std::flush;
+}
 
-                // 1) Print the “starting” line (one per download)
-                {
-                    std::lock_guard<std::mutex> lk(cout_mtx);
-                    std::cout
-                      << "  ↓ [" << (i+1) << "/" << N << "] "
+std::vector<std::future<bool>> futures;
+futures.reserve(total);
+
+for (size_t i = 0; i < total; ++i) {
+    const auto& p = installOrder[i];
+    futures.push_back(std::async(std::launch::async, [&, i]() {
+        auto url = p.repoUrl + "/" + p.filename;
+        auto out = tmp / p.filename;
+
+        // Print start line
+        {
+            std::lock_guard<std::mutex> lk(cout_mtx);
+            std::cout << "\n  ↓ [" << (i+1) << "/" << total << "] "
                       << "downloading " << p.pkgname << "-" << p.pkgver
                       << "\n";
-                }
+        }
 
-                // 2) Perform the download silently (curl -sS)
-                std::string cmd = "curl -fSLsS '" + url + "' -o '" + out.string() + "'";
-                int rc = std::system(cmd.c_str());
+        // Download with wget
+            std::string cmd = "wget --quiet -c -t  0 --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=30 -O '" + out.string() + "' '" + url + "'";
 
-                // 3) Print the “result” line
-                {
-                    std::lock_guard<std::mutex> lk(cout_mtx);
-                    if (rc == 0) {
-                        std::cout
-                          << "  ✔ [" << (i+1) << "/" << N << "] "
+        int rc = std::system(cmd.c_str());
+
+        // Print result line
+        {
+            std::lock_guard<std::mutex> lk(cout_mtx);
+            if (rc == 0) {
+                std::cout << "  ✔ [" << (i+1) << "/" << total << "] "
                           << "downloaded  " << p.pkgname << "-" << p.pkgver
                           << "\n";
-                    } else {
-                        std::cout
-                          << "  ✖ [" << (i+1) << "/" << N << "] "
-                          << "failed    " << p.pkgname << "-" << p.pkgver
+            } else {
+                std::cout << "  ✖ [" << (i+1) << "/" << total << "] "
+                          << "failed      " << p.pkgname << "-" << p.pkgver
                           << "\n";
-                    }
-                }
-
-                return rc == 0;
-            }));
+            }
         }
 
-    // Wait for all downloads
-    for (auto& fut : futures) {
-        if (!fut.get()) {
-            std::cerr << "\033[31merror:\033[0m download failed; aborting install\n";
-            return;
+        // Update and redraw progress bar
+        size_t done = ++completed;
+        size_t filled = (done * barWidth) / total;
+        {
+            std::lock_guard<std::mutex> lk(cout_mtx);
+            std::cout << "  Progress: ["
+                      << std::string(filled, '=')
+                      << std::string(barWidth - filled, ' ')
+                      << "] " << (done * 100 / total) << "%\r"
+                      << std::flush;
         }
+
+        return rc == 0;
+    }));
+}
+
+// Wait for all
+for (auto& fut : futures) {
+    if (!fut.get()) {
+        std::cerr << "\n\033[31merror:\033[0m download failed; aborting install\n";
+        return;
     }
+}
+
+// Final newline after bar
+{
+    std::lock_guard<std::mutex> lk(cout_mtx);
+    std::cout << "\n";
+}
+
+        std::unordered_set<std::string> staged;
+        for (auto const& p : installOrder)
+            staged.insert(p.pkgname);
 
     // 5) Install each downloaded archive in order
         std::string installRoot = bootstrapDir_.empty() ? "/" : bootstrapDir_;
-        Installer inst(db, repo, force_, installRoot);
+        Installer inst(db, repo, force_, installRoot, staged);
 
     for (auto const& p : installOrder) {
         fs::path pkgPath = tmp / p.filename;

@@ -10,6 +10,7 @@
 #include <iostream>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <yaml-cpp/yaml.h>
 #include <yaml-cpp/exceptions.h>
 #include <yaml-cpp/node/node.h>
@@ -25,6 +26,8 @@ CLI::CLI(int argc, char* argv[])
     , force_(false)
     , parseOutput_(false)
 {}
+
+
 
 void CLI::run() {
     // Define global flags
@@ -88,7 +91,7 @@ void CLI::run() {
     Repository repo(/* url */"", repoDir.string());
 
     // Dispatch commands
-    if (cmd == "install") {
+    if (cmd == "install-bin") {
         if (args.empty()) {
             std::cerr << "\033[31merror:\033[0m 'install' requires at least one .apkg path\n";
             return;
@@ -100,6 +103,192 @@ void CLI::run() {
                 std::cerr << "\033[31merror:\033[0m Failed to install '" << pkg << "'\n";
             }
         }
+    }
+
+    else if (cmd == "install") {
+    // 1) Locate repos base directory
+    fs::path repoBase = bootstrapDir_.empty()
+        ? fs::path("/var/lib/anemo/repos")
+        : fs::path(bootstrapDir_) / "var/lib/anemo/repos";
+
+    if (!fs::exists(repoBase) || !fs::is_directory(repoBase)) {
+        std::cerr << "\033[31merror:\033[0m repos directory '"
+                  << repoBase << "' does not exist\n";
+        return;
+    }
+
+    // 2) Build a mapping of package name -> list of available repo entries
+    struct RepoPkg {
+        std::string pkgname, pkgver, arch, filename, repoUrl;
+        std::vector<std::string> depends;
+        int priority;
+        std::string repoName;
+    };
+    std::unordered_map<std::string, std::vector<RepoPkg>> pkgMap;
+
+    for (auto& entry : fs::directory_iterator(repoBase)) {
+        if (entry.path().extension() != ".json") continue;
+        std::string repoName = entry.path().stem();
+        // Load the repo descriptor (name/url/priority)
+        YAML::Node desc;
+        try { desc = YAML::LoadFile(entry.path().string()); }
+        catch (const YAML::Exception& e) {
+            std::cerr << "\033[31merror:\033[0m parsing " << entry.path().filename()
+                      << ": " << e.what() << "\n";
+            continue;
+        }
+        std::string url      = desc["url"].as<std::string>();
+        int priority         = desc["priority"].as<int>();
+
+        // Load the remote index we synced earlier
+        fs::path indexFile = repoBase / repoName / "repo.json";
+        if (!fs::exists(indexFile)) continue;
+
+        YAML::Node idx;
+        try { idx = YAML::LoadFile(indexFile.string()); }
+        catch (const YAML::Exception& e) {
+            std::cerr << "\033[31merror:\033[0m parsing " << indexFile.filename()
+                      << ": " << e.what() << "\n";
+            continue;
+        }
+        auto packages = idx["packages"];
+        if (!packages || !packages.IsSequence()) continue;
+
+        // Register each package entry
+        for (const auto& node : packages) {
+            RepoPkg rp;
+            rp.pkgname   = node["pkgname"].as<std::string>();
+            rp.pkgver    = node["pkgver"].as<std::string>();
+            rp.arch      = node["arch"].as<std::string>();
+            rp.filename  = node["filename"].as<std::string>();
+            rp.repoUrl   = url;
+            rp.priority  = priority;
+            rp.repoName  = repoName;
+
+            if (node["depends"]) {
+                for (auto& d : node["depends"])
+                    rp.depends.push_back(d.as<std::string>());
+            }
+            pkgMap[rp.pkgname].push_back(std::move(rp));
+        }
+    }
+
+    // 3) Resolve dependencies (DFS, picking highest-priority entries)
+    std::vector<RepoPkg> installOrder;
+    std::unordered_set<std::string> visited, inStack;
+    std::function<bool(const std::string&)> dfs;
+    dfs = [&](auto const& name) -> bool {
+        if (visited.count(name)) return true;
+        auto it = pkgMap.find(name);
+        if (it == pkgMap.end()) {
+            std::cerr << "\033[31merror:\033[0m package '" << name
+                      << "' not found in any repo\n";
+            return false;
+        }
+        // pick best entry by priority (higher first), then lex ver
+        auto& candidates = it->second;
+        std::sort(candidates.begin(), candidates.end(),
+                  [](auto const& a, auto const& b){
+                      if (a.priority != b.priority)
+                          return a.priority > b.priority;
+                      return a.pkgver > b.pkgver;
+                  });
+        const RepoPkg& best = candidates[0];
+
+        // detect cycles
+        if (inStack.count(name)) {
+            std::cerr << "\033[31merror:\033[0m cyclic dependency detected on '"
+                      << name << "'\n";
+            return false;
+        }
+        inStack.insert(name);
+
+        // resolve each dependency
+        for (auto const& dep : best.depends) {
+            if (!db.isInstalled(dep, "")) {
+                if (!dfs(dep)) return false;
+            }
+        }
+
+        inStack.erase(name);
+        visited.insert(name);
+        installOrder.push_back(best);
+        return true;
+    };
+
+    // Kick off resolution for each requested package
+    for (auto const& name : args) {
+        if (!db.isInstalled(name, "")) {
+            if (!dfs(name)) return;
+        }
+    }
+
+    if (installOrder.empty()) {
+        std::cout << "\033[32minfo:\033[0m all requested packages are already installed\n";
+        return;
+    }
+
+    // 4) Parallel download of all needed .apkg files
+    std::cout << "\033[1;34m🚀 Downloading " << installOrder.size()
+              << " packages in parallel...\033[0m\n";
+
+    fs::path tmp = fs::temp_directory_path() / "anemo_pkgs";
+    fs::create_directories(tmp);
+    size_t N = installOrder.size();
+
+    struct DownloadTask {
+        size_t index;
+        RepoPkg pkg;
+    };
+    std::vector<std::future<bool>> futures;
+    futures.reserve(N);
+    for (size_t i = 0; i < N; ++i) {
+        auto task = DownloadTask{i, installOrder[i]};
+        futures.push_back(std::async(std::launch::async, [&, task]() {
+            const auto& p = task.pkg;
+            std::string url = p.repoUrl + "/" + p.filename;
+            fs::path out = tmp / p.filename;
+            std::cout << "  \033[33m↓ [" << (task.index+1) << "/" << N
+                      << "]\033[0m downloading \033[1m" << p.pkgname
+                      << "-" << p.pkgver << "\033[0m ... " << std::flush;
+            int rc = std::system(
+                ("curl -fSL '" + url + "' -o '" + out.string() + "'").c_str()
+            );
+            if (rc == 0) {
+                std::cout << "\033[32m✔\033[0m\n";
+                return true;
+            } else {
+                std::cout << "\033[31m✖\033[0m\n";
+                return false;
+            }
+        }));
+    }
+
+    // Wait for all downloads
+    for (auto& fut : futures) {
+        if (!fut.get()) {
+            std::cerr << "\033[31merror:\033[0m download failed; aborting install\n";
+            return;
+        }
+    }
+
+    // 5) Install each downloaded archive in order
+    std::string installRoot = bootstrapDir_.empty() ? "/" : bootstrapDir_;
+    Installer inst(db, repo, force_, installRoot);
+
+    for (auto const& p : installOrder) {
+        fs::path pkgPath = tmp / p.filename;
+        std::cout << "\n\033[1;34m📦 Installing \033[1m"
+                  << p.pkgname << "-" << p.pkgver << "\033[0m\n";
+        if (!inst.installArchive(pkgPath.string())) {
+            std::cerr << "\033[31merror:\033[0m Failed to install '"
+                      << p.pkgname << "'\n";
+            return;
+        }
+    }
+
+    std::cout << "\033[32msuccess:\033[0m All packages installed.\n";
+
     }
 
     else if (cmd == "remove") {

@@ -1,0 +1,10 @@
+# test-package/anemonix.yaml
+name: "test-package"
+version: "1.0-1"
+arch: "any"
+deps: []
+makedepends: []
+conflicts: []
+replaces: []
+provides: []
+description: "Just a test package for Anemo."

@@ -1,0 +1,10 @@
+# normal-package-empty/anemonix.yaml
+name: "normal-package"
+version: "1.0-1"
+arch: "any"
+deps: []
+makedepends: []
+conflicts: []
+replaces: []
+provides: []
+description: "Just an empty package for Anemo."

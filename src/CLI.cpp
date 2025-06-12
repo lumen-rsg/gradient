@@ -6,32 +6,40 @@
 #include "Repository.h"
 #include "Database.h"
 #include "cxxopts.h"
+
 #include <iostream>
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 namespace anemo {
 
 CLI::CLI(int argc, char* argv[])
-    : argc_(argc), argv_(argv), force_(false), parseOutput_(false) {}
+    : argc_(argc)
+    , argv_(argv)
+    , force_(false)
+    , parseOutput_(false)
+{}
 
 void CLI::run() {
-    // 1) Define global flags
+    // Define global flags
     cxxopts::Options opts("anemo", "Anemo package manager");
     opts.positional_help("<command> [args]");
     opts.allow_unrecognised_options();
     opts.add_options()
-        ("f,force", "Force action (ignore warnings)", cxxopts::value<bool>(force_))
-        ("b,bootstrap", "Bootstrap directory prefix", cxxopts::value<std::string>(bootstrapDir_))
-        ("p,parse", "Parseable output", cxxopts::value<bool>(parseOutput_))
-        ("h,help", "Print help");
+        ("f,force",     "Force action (ignore warnings)",   cxxopts::value<bool>(force_))
+        ("b,bootstrap", "Bootstrap directory prefix",       cxxopts::value<std::string>(bootstrapDir_))
+        ("p,parse",     "Parseable output",                 cxxopts::value<bool>(parseOutput_))
+        ("h,help",      "Print help");
 
-    // 2) Parse
+    // Parse
     auto result = opts.parse(argc_, argv_);
     if (result.count("help")) {
         std::cout << opts.help() << "\n";
         return;
     }
 
-    // 3) Extract command + its args
+    // Extract command + args
     auto unmatched = result.unmatched();
     if (unmatched.empty()) {
         std::cout << opts.help() << "\n";
@@ -40,40 +48,68 @@ void CLI::run() {
     std::string cmd = unmatched[0];
     std::vector<std::string> args(unmatched.begin() + 1, unmatched.end());
 
-    // 4) Initialize core services
-    const std::string dbPath = bootstrapDir_.empty()
-        ? "/var/lib/anemo/anemo.db"
-        : (bootstrapDir_ + "/anemo.db");
-    Database db(dbPath);
+    // Prepare bootstrap paths
+    std::string rootPrefix = bootstrapDir_.empty() ? "" : bootstrapDir_;
+
+    fs::path dbDir = fs::path(rootPrefix) / "var/lib/anemo";
+    std::error_code ec;
+    if (!fs::exists(dbDir)) {
+        fs::create_directories(dbDir, ec);
+        if (ec) {
+            std::cerr << "\033[31merror:\033[0m cannot create directory '"
+                      << dbDir << "': " << ec.message() << "\n";
+            return;
+        }
+    }
+    fs::path dbPath = dbDir / "anemo.db";
+
+    fs::path repoDir = fs::path(rootPrefix) / "var/lib/anemo/repos";
+    if (!fs::exists(repoDir)) {
+        fs::create_directories(repoDir, ec);
+        if (ec) {
+            std::cerr << "\033[31merror:\033[0m cannot create directory '"
+                      << repoDir << "': " << ec.message() << "\n";
+            return;
+        }
+    }
+
+    // Open DB and Repo
+    Database db(dbPath.string());
     if (!db.open() || !db.initSchema()) {
         std::cerr << "\033[31merror:\033[0m Unable to open or initialize database at "
                   << dbPath << "\n";
         return;
     }
+    Repository repo(/* url */"", repoDir.string());
 
-    const std::string repoDir = bootstrapDir_.empty()
-        ? "/var/lib/anemo/repos"
-        : (bootstrapDir_ + "/repos");
-    Repository repo(/* url: */"", repoDir);
-
-    // 5) Dispatch
+    // Dispatch commands
     if (cmd == "install") {
         if (args.empty()) {
             std::cerr << "\033[31merror:\033[0m 'install' requires at least one .apkg path\n";
             return;
         }
-        Installer inst(db, repo, force_, bootstrapDir_.empty() ? "/" : bootstrapDir_);
+        std::string installRoot = rootPrefix.empty() ? "/" : rootPrefix;
+        Installer inst(db, repo, force_, installRoot);
         for (auto& pkg : args) {
             if (!inst.installArchive(pkg)) {
                 std::cerr << "\033[31merror:\033[0m Failed to install '" << pkg << "'\n";
-                // continue to next or exit early?
-                // break;
             }
         }
     }
     else if (cmd == "remove") {
-        // TODO: implement removal logic
-        std::cout << "\033[32minfo:\033[0m remove command invoked\n";
+        // Cannot remove when bootstrapping into alternate root
+        if (!bootstrapDir_.empty()) {
+            std::cerr << "\033[31merror:\033[0m Cannot remove packages while bootstrapping (using -b)\n";
+            return;
+        }
+        if (args.empty()) {
+            std::cerr << "\033[31merror:\033[0m 'remove' requires at least one package name\n";
+            return;
+        }
+        // TODO: implement removal logic using Installer::removePackage()
+        std::cout << "\033[32minfo:\033[0m remove command invoked for ";
+        for (auto& pkg : args) std::cout << pkg << " ";
+        std::cout << "\n";
     }
     else if (cmd == "add-repo") {
         std::cout << "\033[32minfo:\033[0m add-repo command invoked\n";

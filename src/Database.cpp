@@ -21,8 +21,10 @@ void Database::close() {
 bool Database::initSchema() {
     const char* sql =
         "CREATE TABLE IF NOT EXISTS packages ("
-        " name TEXT PRIMARY KEY,"
-        " version TEXT"
+        " name              TEXT PRIMARY KEY,"
+        " version           TEXT NOT NULL,"
+        " arch              TEXT NOT NULL,"
+        " install_script    TEXT"
         ");"
         "CREATE TABLE IF NOT EXISTS files ("
         " pkg_name TEXT,"
@@ -66,13 +68,37 @@ bool Database::rollbackTransaction() {
     return true;
 }
 
-bool Database::addPackage(const Package::Metadata& meta) {
-    const char* sql = "INSERT OR REPLACE INTO packages(name,version) VALUES(?,?);";
-    sqlite3_stmt* stmt;
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
-    sqlite3_bind_text(stmt, 1, meta.name.c_str(), -1, nullptr);
-    sqlite3_bind_text(stmt, 2, meta.version.c_str(), -1, nullptr);
-    bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+    bool Database::addPackage(const Package::Metadata& meta,
+                              const std::string& installScriptPath)
+{
+    // Now storing name, version, arch, and optional install_script
+    const char* sql =
+      "INSERT OR REPLACE INTO packages "
+      "(name, version, arch, install_script) "
+      "VALUES (?, ?, ?, ?);";
+
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        return false;
+    }
+
+    // Bind fields
+    sqlite3_bind_text(stmt, 1,
+                      meta.name.c_str(), -1, nullptr);
+    sqlite3_bind_text(stmt, 2,
+                      meta.version.c_str(), -1, nullptr);
+    sqlite3_bind_text(stmt, 3,
+                      meta.arch.c_str(), -1, nullptr);
+
+    if (installScriptPath.empty()) {
+        sqlite3_bind_null(stmt, 4);
+    } else {
+        sqlite3_bind_text(stmt, 4,
+                          installScriptPath.c_str(), -1, nullptr);
+    }
+
+    // Execute
+    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
     sqlite3_finalize(stmt);
     return ok;
 }

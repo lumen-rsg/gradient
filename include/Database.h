@@ -25,7 +25,7 @@ namespace anemo {
         bool commitTransaction();
         bool rollbackTransaction();
 
-        bool addPackage(const Package::Metadata& meta);
+        bool addPackage(const Package::Metadata& meta, const std::string& installScriptPath);
         bool removePackage(const std::string& name);
         bool logFile(const std::string& pkgName, const std::string& filePath);
         bool markBroken(const std::string& pkgName);

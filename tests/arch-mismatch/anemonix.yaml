@@ -1,0 +1,11 @@
+# arch-mismatch/anemonix.yaml
+title: "Architecture Mismatch Test"
+name: "arch-test"
+version: "1.0-1"
+arch: "arm64"
+deps: []
+makedepends: []
+conflicts: []
+replaces: []
+provides: []
+description: "A package built for arm64 to test arch rejection."

@@ -1,0 +1,10 @@
+# replace-test/anemonix.yaml
+name: "replace-test"
+version: "2.0-1"
+arch: "any"
+deps: []
+makedepends: []
+conflicts: []
+replaces: ["old-pkg"]
+provides: []
+description: "Should auto-remove \"old-pkg\" before install."

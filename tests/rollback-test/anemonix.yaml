@@ -1,0 +1,10 @@
+# rollback-test/anemonix.yaml
+name: "rollback-test"
+version: "1.0-1"
+arch: "any"
+deps: []
+makedepends: []
+conflicts: []
+replaces: []
+provides: []
+description: "Creates multiple files, some with install failures to test rollback."

@@ -1,0 +1,10 @@
+# conflict-test/anemonix.yaml
+name: "conflict-test"
+version: "1.0-1"
+arch: "any"
+deps: []
+makedepends: []
+conflicts: ["existing-pkg"]
+replaces: []
+provides: []
+description: "Conflicts with an already installed package."

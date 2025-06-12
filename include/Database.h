@@ -9,22 +9,35 @@
 #include <vector>
 #include <sqlite3.h>
 #include "Package.h"
+
 namespace anemo {
+
     class Database {
     public:
-        explicit Database(const std::string& dbPath);
+        Database(const std::string& dbPath);
         ~Database();
+
         bool open();
         void close();
         bool initSchema();
+
+        bool beginTransaction();
+        bool commitTransaction();
+        bool rollbackTransaction();
+
         bool addPackage(const Package::Metadata& meta);
         bool removePackage(const std::string& name);
+        bool logFile(const std::string& pkgName, const std::string& filePath);
+        bool markBroken(const std::string& pkgName);
+
         [[nodiscard]] std::vector<Package::Metadata> installedPackages() const;
-        [[nodiscard]] bool isInstalled(const std::string& name, const std::string& version) const;
+        bool isInstalled(const std::string& name, const std::string& version) const;
+
     private:
         std::string dbPath_;
         sqlite3* db_ = nullptr;
     };
+
 } // namespace anemo
 
 #endif //DATABASE_H

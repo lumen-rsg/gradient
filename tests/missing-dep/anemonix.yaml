@@ -1,0 +1,10 @@
+# missing-dep/anemonix.yaml
+name: "missing-dep"
+version: "1.0-1"
+arch: "any"
+deps: ["nonexistent-lib"]
+makedepends: []
+conflicts: []
+replaces: []
+provides: []
+description: "Declares a dependency that is not installed."

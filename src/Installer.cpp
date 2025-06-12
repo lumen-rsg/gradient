@@ -15,12 +15,6 @@ namespace fs = std::filesystem;
 
 namespace anemo {
 
-bool Installer::removePackage(const std::string& name) {
-    // TODO: implement reverse-dependency checks, fetch stored script path from DB,
-    // run pre_remove/post_remove hooks, remove files logged in DB, update DB.
-    return true;
-}
-
 Installer::Installer(Database& db,
                      Repository& repo,
                      bool force,
@@ -46,7 +40,6 @@ std::string Installer::makeTempDir() {
 }
 
 bool Installer::installArchive(const std::string& archivePath) {
-    // Reset warnings
     warnings_ = false;
 
     // 1) Load metadata
@@ -107,8 +100,18 @@ bool Installer::installArchive(const std::string& archivePath) {
         return false;
     }
 
+    // 7) Locate any install.anemonix script under tmp
+    fs::path scriptSrc;
+    for (auto& entry : fs::recursive_directory_iterator(tmp)) {
+        if (entry.is_regular_file() &&
+            entry.path().filename() == "install.anemonix")
+        {
+            scriptSrc = entry.path();
+            break;
+        }
+    }
+
     // 7) Persist install script (if present)
-    fs::path scriptSrc = fs::path(tmp) / "install.anemonix";
     std::string storedScriptPath;
     if (fs::exists(scriptSrc) && fs::is_regular_file(scriptSrc)) {
         fs::path scriptsDir = fs::path(rootDir_) / "var/lib/anemo/scripts";
@@ -119,7 +122,7 @@ bool Installer::installArchive(const std::string& archivePath) {
         storedScriptPath = scriptDst.string();
     }
 
-    // 8) Prepare rollback
+    // 8) Prepare for rollback
     std::vector<fs::path> installedFiles;
     auto rollback = [&]() {
         db_.rollbackTransaction();
@@ -131,13 +134,20 @@ bool Installer::installArchive(const std::string& archivePath) {
         }
     };
 
-    // 9) Begin DB transaction
+    // 9) Begin transaction
     if (!db_.beginTransaction()) {
         std::cerr << "\033[31merror:\033[0m Failed to begin DB transaction.\n";
         return false;
     }
 
-    // 10) Locate the package/ directory
+    // 10) Record package metadata & dependencies before logging files
+    if (!db_.addPackage(meta, storedScriptPath)) {
+        std::cerr << "\033[31merror:\033[0m Failed to add package record.\n";
+        rollback();
+        return false;
+    }
+
+    // 11) Locate package/ directory
     fs::path pkgRoot;
     for (auto& entry : fs::recursive_directory_iterator(tmp)) {
         if (entry.is_directory() && entry.path().filename() == "package") {
@@ -152,8 +162,10 @@ bool Installer::installArchive(const std::string& archivePath) {
                   : fs::path(tmp);
     }
 
-    // 11) Install files (if any)
-    bool hasFiles = fs::exists(pkgRoot) && fs::is_directory(pkgRoot) && !fs::is_empty(pkgRoot);
+    // 12) Install files & log them
+    bool hasFiles = fs::exists(pkgRoot)
+                 && fs::is_directory(pkgRoot)
+                 && !fs::is_empty(pkgRoot);
     if (!hasFiles) {
         std::cerr << "\033[33minfo:\033[0m package contains no files; skipping file installation\n";
     } else {
@@ -164,7 +176,6 @@ bool Installer::installArchive(const std::string& archivePath) {
             auto dest = fs::path(rootDir_) / rel;
             fs::create_directories(dest.parent_path());
 
-            // Install on disk under bootstrap (or real /)
             std::string cmd = "/bin/install -D "
                               + entry.path().string()
                               + " " + dest.string();
@@ -175,23 +186,15 @@ bool Installer::installArchive(const std::string& archivePath) {
                 return false;
             }
 
-            // Record the path relative to real root (strip bootstrap prefix)
             std::string recordPath = (fs::path("/") / rel).string();
             if (!db_.logFile(meta.name, recordPath)) {
                 std::cerr << "\033[31merror:\033[0m Failed logging file '"
-                          << recordPath << "'.\n";
+                          << recordPath << "': " << std::endl;
                 rollback();
                 return false;
             }
             installedFiles.push_back(dest);
         }
-    }
-
-    // 12) Record package metadata and script path
-    if (!db_.addPackage(meta, storedScriptPath)) {
-        std::cerr << "\033[31merror:\033[0m Failed to add package record.\n";
-        rollback();
-        return false;
     }
 
     // 13) Commit transaction
@@ -209,15 +212,105 @@ bool Installer::installArchive(const std::string& archivePath) {
 
     // 15) Run post-install hook
     if (!storedScriptPath.empty()) {
-        ScriptExecutor::runScript(storedScriptPath, "post_install");
+        ScriptExecutor::runScript(storedScriptPath, "post_install", rootDir_);
     } else {
         std::cerr << "\033[33minfo:\033[0m no install.anemonix script found; skipping post-install hook\n";
     }
 
-    // 16) Success message
+    // 16) Success
     std::cout << "\033[32msuccess:\033[0m Installed '"
               << meta.name << "-" << meta.version << "'.\n";
 
+    return true;
+}
+
+bool Installer::removePackage(const std::string& name) {
+    // 1) Check installed
+    if (!db_.isInstalled(name, "")) {
+        std::cerr << "\033[31merror:\033[0m Package '" << name << "' is not installed.\n";
+        return false;
+    }
+
+    // 2) Reverse-dependency check
+    auto rev = db_.getReverseDependencies(name);
+    if (!rev.empty()) {
+        if (!force_) {
+            std::cerr << "\033[31merror:\033[0m Cannot remove '" << name
+                      << "'; other packages depend on it:\n";
+            for (auto& pkg : rev) {
+                std::cerr << "  - " << pkg << "\n";
+            }
+            return false;
+        } else {
+            std::cerr << "\033[33mwarning:\033[0m Force removing '" << name
+                      << "'; marking dependents as broken.\n";
+            for (auto& pkg : rev) {
+                db_.markBroken(pkg);
+            }
+        }
+    }
+
+    // 3) Run pre-remove hook
+    auto script = db_.getInstallScript(name);
+
+    // 4) Begin DB transaction
+    if (!db_.beginTransaction()) {
+        std::cerr << "\033[31merror:\033[0m Failed to begin DB transaction.\n";
+        return false;
+    }
+
+    // 5) Remove files from disk & DB
+    auto files = db_.getFiles(name);
+    for (auto& f : files) {
+        // f is stored as absolute ("/path/to/file")
+        fs::path dest = fs::path(rootDir_) / f.substr(1);
+        if (fs::exists(dest) && !fs::remove(dest)) {
+            std::cerr << "\033[33mwarning:\033[0m Failed to remove file '"
+                      << dest << "'.\n";
+        }
+    }
+    if (!db_.removeFiles(name)) {
+        std::cerr << "\033[31merror:\033[0m Failed to remove file records.\n";
+        db_.rollbackTransaction();
+        return false;
+    }
+
+    if (!db_.removeReverseDependencies(name)) {
+        std::cerr << "\033[31merror:\033[0m Failed to remove reverse‐dependency records for '"
+                  << name << "'.\n";
+        db_.rollbackTransaction();
+        return false;
+    }
+
+    // 9) Run post-remove hook
+    if (!script.empty() && fs::exists(script)) {
+        std::cout << script << std::endl;
+        ScriptExecutor::runScript(script, "post_remove");
+    }
+
+    // 6) Remove stored script file
+    if (!script.empty()) {
+        if (!fs::remove(script)) {
+            std::cerr << "\033[33mwarning:\033[0m Failed to remove script '"
+                      << script << "'.\n";
+        }
+    }
+
+    // 7) Delete from packages table
+    if (!db_.deletePackage(name)) {
+        std::cerr << "\033[31merror:\033[0m Failed to remove package record.\n";
+        db_.rollbackTransaction();
+        return false;
+    }
+
+    // 8) Commit DB transaction
+    if (!db_.commitTransaction()) {
+        std::cerr << "\033[31merror:\033[0m Failed to commit DB transaction.\n";
+        db_.rollbackTransaction();
+        return false;
+    }
+
+    std::cout << "\033[32msuccess:\033[0m Removed '" << name << "'.\n";
     return true;
 }
 

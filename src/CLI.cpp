@@ -51,7 +51,7 @@ void CLI::run() {
     // Prepare bootstrap paths
     std::string rootPrefix = bootstrapDir_.empty() ? "" : bootstrapDir_;
 
-    fs::path dbDir = fs::path(rootPrefix) / "var/lib/anemo";
+    fs::path dbDir = fs::path(rootPrefix) / "/var/lib/anemo/";
     std::error_code ec;
     if (!fs::exists(dbDir)) {
         fs::create_directories(dbDir, ec);
@@ -96,20 +96,22 @@ void CLI::run() {
             }
         }
     }
+
     else if (cmd == "remove") {
-        // Cannot remove when bootstrapping into alternate root
         if (!bootstrapDir_.empty()) {
-            std::cerr << "\033[31merror:\033[0m Cannot remove packages while bootstrapping (using -b)\n";
+            std::cerr << "\033[31merror:\033[0m Cannot remove packages when bootstrapping.\n";
             return;
         }
         if (args.empty()) {
             std::cerr << "\033[31merror:\033[0m 'remove' requires at least one package name\n";
             return;
         }
-        // TODO: implement removal logic using Installer::removePackage()
-        std::cout << "\033[32minfo:\033[0m remove command invoked for ";
-        for (auto& pkg : args) std::cout << pkg << " ";
-        std::cout << "\n";
+        Installer inst(db, repo, force_, /*rootDir=*/"/");
+        for (auto& pkg : args) {
+            if (!inst.removePackage(pkg)) {
+                std::cerr << "\033[31merror:\033[0m Failed to remove '" << pkg << "'\n";
+            }
+        }
     }
     else if (cmd == "add-repo") {
         std::cout << "\033[32minfo:\033[0m add-repo command invoked\n";

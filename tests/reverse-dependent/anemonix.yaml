@@ -1,0 +1,10 @@
+name: "reverse-dependent"
+version: "1.0-1"
+arch: "any"
+deps:
+  - reverse-base
+makedepends: []
+conflicts: []
+replaces: []
+provides: []
+description: "Dependent package for reverse-dep test"

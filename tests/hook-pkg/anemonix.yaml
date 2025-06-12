@@ -1,0 +1,9 @@
+name: "hook-pkg"
+version: "1.0-1"
+arch: "any"
+deps: []
+makedepends: []
+conflicts: []
+replaces: []
+provides: []
+description: "Package with remove hooks"

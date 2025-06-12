@@ -1,0 +1,13 @@
+#!/bin/sh
+
+post_common(){
+    echo "post_common hook done."
+}
+
+post_install(){
+    echo "post_install hook done."
+}
+
+post_remove(){
+    echo "post_remove hook done."
+}

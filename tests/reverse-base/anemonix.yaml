@@ -1,0 +1,9 @@
+name: "reverse-base"
+version: "1.0-1"
+arch: "any"
+deps: []
+makedepends: []
+conflicts: []
+replaces: []
+provides: []
+description: "Base package for reverse-dep test"

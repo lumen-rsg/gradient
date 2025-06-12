@@ -1,0 +1,9 @@
+name: "normal-remove"
+version: "1.0-1"
+arch: "any"
+deps: []
+makedepends: []
+conflicts: []
+replaces: []
+provides: []
+description: "Simple package for remove test"

@@ -1,43 +1,44 @@
-//
-// Created by cv2 on 6/12/25.
-//
+// include/anemo/Database.h
+#pragma once
 
-#ifndef DATABASE_H
-#define DATABASE_H
-
+#include "Package.h"
 #include <string>
 #include <vector>
 #include <sqlite3.h>
-#include "Package.h"
 
 namespace anemo {
 
     class Database {
     public:
-        Database(const std::string& dbPath);
+        Database(const std::string& path);
         ~Database();
 
         bool open();
-        void close();
         bool initSchema();
 
+        // Install
+        bool addPackage(const Package::Metadata& meta,
+                        const std::string& installScriptPath);
+
+        // Removal support
+        std::vector<std::string> getReverseDependencies(const std::string& packageName);
+        std::vector<std::string> getFiles(const std::string& packageName);
+        std::string getInstallScript(const std::string& packageName);
+        bool removeFiles(const std::string& packageName);
+        bool deletePackage(const std::string& packageName);
+        bool markBroken(const std::string& packageName);
+        bool removeReverseDependencies(const std::string& pkgName);
+
+        // Existing APIs
+        bool isInstalled(const std::string& name, const std::string& version) const;
+        bool logFile(const std::string& pkg, const std::string& path);
         bool beginTransaction();
         bool commitTransaction();
         bool rollbackTransaction();
 
-        bool addPackage(const Package::Metadata& meta, const std::string& installScriptPath);
-        bool removePackage(const std::string& name);
-        bool logFile(const std::string& pkgName, const std::string& filePath);
-        bool markBroken(const std::string& pkgName);
-
-        [[nodiscard]] std::vector<Package::Metadata> installedPackages() const;
-        bool isInstalled(const std::string& name, const std::string& version) const;
-
     private:
-        std::string dbPath_;
-        sqlite3* db_ = nullptr;
+        sqlite3* db_;
+        std::string path_;
     };
 
 } // namespace anemo
-
-#endif //DATABASE_H

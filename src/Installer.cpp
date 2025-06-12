@@ -52,7 +52,7 @@ bool Installer::installArchive(const std::string& archivePath) {
 
     // 2) Architecture check
     auto hostArch = detectHostArch();
-    if (meta.arch != "any" && meta.arch != hostArch) {
+    if ((meta.arch != "any" && meta.arch != "all") && meta.arch != hostArch) {
         std::cerr << "\033[31merror:\033[0m Arch mismatch: package is '"
                   << meta.arch << "' but host is '" << hostArch << "'.\n";
         return false;
@@ -162,7 +162,7 @@ bool Installer::installArchive(const std::string& archivePath) {
                   : fs::path(tmp);
     }
 
-    // 12) Install files & log them
+    // 12) Install files & log them (handling symlinks)
     bool hasFiles = fs::exists(pkgRoot)
                  && fs::is_directory(pkgRoot)
                  && !fs::is_empty(pkgRoot);
@@ -170,29 +170,43 @@ bool Installer::installArchive(const std::string& archivePath) {
         std::cerr << "\033[33minfo:\033[0m package contains no files; skipping file installation\n";
     } else {
         for (auto& entry : fs::recursive_directory_iterator(pkgRoot)) {
-            if (!fs::is_regular_file(entry.path())) continue;
-
-            auto rel  = fs::relative(entry.path(), pkgRoot);
-            auto dest = fs::path(rootDir_) / rel;
+            fs::path src = entry.path();
+            fs::path rel = fs::relative(src, pkgRoot);
+            fs::path dest = fs::path(rootDir_) / rel;
             fs::create_directories(dest.parent_path());
 
-            std::string cmd = "/bin/install -D "
-                              + entry.path().string()
-                              + " " + dest.string();
-            if (std::system(cmd.c_str()) != 0) {
-                std::cerr << "\033[31merror:\033[0m Failed to install '"
-                          << entry.path() << "'.\n";
-                rollback();
-                return false;
+            if (fs::is_symlink(src)) {
+                // Recreate the symlink at dest
+                auto target = fs::read_symlink(src);
+                // If dest exists (maybe from a previous run), remove it first
+                if (fs::exists(dest)) fs::remove(dest);
+                fs::create_symlink(target, dest);
+            }
+            else if (fs::is_regular_file(src)) {
+                // Copy regular file
+                std::string cmd = "/bin/install -D " + src.string() + " " + dest.string();
+                if (std::system(cmd.c_str()) != 0) {
+                    std::cerr << "\033[31merror:\033[0m Failed to install '"
+                              << src << "'.\n";
+                    rollback();
+                    return false;
+                }
+            }
+            else {
+                // Skip directories (we already created them)
+                continue;
             }
 
+            // Log the path as seen by the system (always absolute from /)
             std::string recordPath = (fs::path("/") / rel).string();
             if (!db_.logFile(meta.name, recordPath)) {
                 std::cerr << "\033[31merror:\033[0m Failed logging file '"
-                          << recordPath << "': " << std::endl;
+                          << recordPath << "'.\n";
                 rollback();
                 return false;
             }
+
+            // Track for rollback (we always removed or created at dest)
             installedFiles.push_back(dest);
         }
     }

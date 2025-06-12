@@ -107,9 +107,12 @@ void CLI::run() {
 
     else if (cmd == "install") {
     // 1) Locate repos base directory
-    fs::path repoBase = bootstrapDir_.empty()
-        ? fs::path("/var/lib/anemo/repos")
-        : fs::path(bootstrapDir_) / "var/lib/anemo/repos";
+        fs::path repoBase = fs::path("/var/lib/anemo/repos");
+        if (!fs::exists(repoBase) || !fs::is_directory(repoBase)) {
+            std::cerr << "\033[31merror:\033[0m system repos directory '"
+                      << repoBase << "' does not exist\n";
+            return;
+        }
 
     if (!fs::exists(repoBase) || !fs::is_directory(repoBase)) {
         std::cerr << "\033[31merror:\033[0m repos directory '"
@@ -273,8 +276,8 @@ void CLI::run() {
     }
 
     // 5) Install each downloaded archive in order
-    std::string installRoot = bootstrapDir_.empty() ? "/" : bootstrapDir_;
-    Installer inst(db, repo, force_, installRoot);
+        std::string installRoot = bootstrapDir_.empty() ? "/" : bootstrapDir_;
+        Installer inst(db, repo, force_, installRoot);
 
     for (auto const& p : installOrder) {
         fs::path pkgPath = tmp / p.filename;

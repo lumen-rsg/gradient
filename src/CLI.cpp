@@ -236,40 +236,56 @@ void CLI::run() {
     }
 
     // 4) Parallel download of all needed .apkg files
-    std::cout << "\033[1;34m🚀 Downloading " << installOrder.size()
-              << " packages in parallel...\033[0m\n";
+        static std::mutex cout_mtx;
 
-    fs::path tmp = fs::temp_directory_path() / "anemo_pkgs";
-    fs::create_directories(tmp);
-    size_t N = installOrder.size();
+        std::cout << "\033[1;34m🚀 Downloading " << installOrder.size()
+                  << " packages in parallel...\033[0m\n";
 
-    struct DownloadTask {
-        size_t index;
-        RepoPkg pkg;
-    };
-    std::vector<std::future<bool>> futures;
-    futures.reserve(N);
-    for (size_t i = 0; i < N; ++i) {
-        auto task = DownloadTask{i, installOrder[i]};
-        futures.push_back(std::async(std::launch::async, [&, task]() {
-            const auto& p = task.pkg;
-            std::string url = p.repoUrl + "/" + p.filename;
-            fs::path out = tmp / p.filename;
-            std::cout << "  \033[33m↓ [" << (task.index+1) << "/" << N
-                      << "]\033[0m downloading \033[1m" << p.pkgname
-                      << "-" << p.pkgver << "\033[0m ... " << std::flush;
-            int rc = std::system(
-                ("curl -fSL '" + url + "' -o '" + out.string() + "'").c_str()
-            );
-            if (rc == 0) {
-                std::cout << "\033[32m✔\033[0m\n";
-                return true;
-            } else {
-                std::cout << "\033[31m✖\033[0m\n";
-                return false;
-            }
-        }));
-    }
+        fs::path tmp = fs::temp_directory_path() / "anemo_pkgs";
+        fs::create_directories(tmp);
+        size_t N = installOrder.size();
+
+        std::vector<std::future<bool>> futures;
+        futures.reserve(N);
+
+        for (size_t i = 0; i < N; ++i) {
+            const auto& p = installOrder[i];
+            futures.push_back(std::async(std::launch::async, [&, i]() {
+                auto url = p.repoUrl + "/" + p.filename;
+                auto out = tmp / p.filename;
+
+                // 1) Print the “starting” line (one per download)
+                {
+                    std::lock_guard<std::mutex> lk(cout_mtx);
+                    std::cout
+                      << "  ↓ [" << (i+1) << "/" << N << "] "
+                      << "downloading " << p.pkgname << "-" << p.pkgver
+                      << "\n";
+                }
+
+                // 2) Perform the download silently (curl -sS)
+                std::string cmd = "curl -fSLsS '" + url + "' -o '" + out.string() + "'";
+                int rc = std::system(cmd.c_str());
+
+                // 3) Print the “result” line
+                {
+                    std::lock_guard<std::mutex> lk(cout_mtx);
+                    if (rc == 0) {
+                        std::cout
+                          << "  ✔ [" << (i+1) << "/" << N << "] "
+                          << "downloaded  " << p.pkgname << "-" << p.pkgver
+                          << "\n";
+                    } else {
+                        std::cout
+                          << "  ✖ [" << (i+1) << "/" << N << "] "
+                          << "failed    " << p.pkgname << "-" << p.pkgver
+                          << "\n";
+                    }
+                }
+
+                return rc == 0;
+            }));
+        }
 
     // Wait for all downloads
     for (auto& fut : futures) {

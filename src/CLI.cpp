@@ -58,8 +58,12 @@ void CLI::run() {
 
     // Prepare bootstrap paths
     std::string rootPrefix = bootstrapDir_.empty() ? "" : bootstrapDir_;
-
-    fs::path dbDir = fs::path(rootPrefix) / "/var/lib/anemo/";
+    if (!rootPrefix.empty()) {
+        rootPrefix.pop_back();
+    }
+    fs::path dbDir = fs::path(rootPrefix).string() + "/var/lib/anemo/";
+    std::cout << bootstrapDir_ << std::endl;
+    std::cout << dbDir << "\n";
     std::error_code ec;
     if (!fs::exists(dbDir)) {
         fs::create_directories(dbDir, ec);

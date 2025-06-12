@@ -162,54 +162,55 @@ bool Installer::installArchive(const std::string& archivePath) {
                   : fs::path(tmp);
     }
 
-    // 12) Install files & log them (handling symlinks)
-    bool hasFiles = fs::exists(pkgRoot)
-                 && fs::is_directory(pkgRoot)
-                 && !fs::is_empty(pkgRoot);
-    if (!hasFiles) {
-        std::cerr << "\033[33minfo:\033[0m package contains no files; skipping file installation\n";
-    } else {
-        for (auto& entry : fs::recursive_directory_iterator(pkgRoot)) {
-            fs::path src = entry.path();
-            fs::path rel = fs::relative(src, pkgRoot);
-            fs::path dest = fs::path(rootDir_) / rel;
-            fs::create_directories(dest.parent_path());
+    // 12) Install files & log them by extracting via tar (preserves symlinks)
+    {
+        fs::path pkgRoot = fs::path(tmp) / "package";
+        bool hasFiles = fs::exists(pkgRoot)
+                     && fs::is_directory(pkgRoot)
+                     && !fs::is_empty(pkgRoot);
 
-            if (fs::is_symlink(src)) {
-                // Recreate the symlink at dest
-                auto target = fs::read_symlink(src);
-                // If dest exists (maybe from a previous run), remove it first
-                if (fs::exists(dest)) fs::remove(dest);
-                fs::create_symlink(target, dest);
-            }
-            else if (fs::is_regular_file(src)) {
-                // Copy regular file
-                std::string cmd = "/bin/install -D " + src.string() + " " + dest.string();
-                if (std::system(cmd.c_str()) != 0) {
-                    std::cerr << "\033[31merror:\033[0m Failed to install '"
-                              << src << "'.\n";
-                    rollback();
-                    return false;
-                }
-            }
-            else {
-                // Skip directories (we already created them)
-                continue;
-            }
-
-            // Log the path as seen by the system (always absolute from /)
-            std::string recordPath = (fs::path("/") / rel).string();
-            if (!db_.logFile(meta.name, recordPath)) {
-                std::cerr << "\033[31merror:\033[0m Failed logging file '"
-                          << recordPath << "'.\n";
+        if (!hasFiles) {
+            std::cerr << "\033[33minfo:\033[0m package contains no files; skipping file installation\n";
+        } else {
+            // (a) Stream pkgRoot into rootDir_, preserving ACLs, xattrs, symlinks, perms
+            //
+            //   tar --acls --xattrs -C pkgRoot -cf - . \
+            //     | tar --acls --xattrs -C rootDir_ -xpf -
+            //
+            // -c: create, -f - : write to stdout
+            // -x: extract, -f - : read from stdin, -p: preserve permissions
+            // --acls, --xattrs: preserve ACLs and extended attributes
+            std::string tarCmd =
+                "tar --acls --xattrs -C '"  + pkgRoot.string()  + "' -cf - . "
+                "| "
+                "tar --acls --xattrs -C '"  + rootDir_        + "' -xpf -";
+            if (std::system(tarCmd.c_str()) != 0) {
+                std::cerr << "\033[31merror:\033[0m Failed to extract package files via tar pipeline.\n";
                 rollback();
                 return false;
             }
 
-            // Track for rollback (we always removed or created at dest)
-            installedFiles.push_back(dest);
+            // (b) Walk pkgRoot to log every regular file and symlink we just installed
+            for (auto& entry : fs::recursive_directory_iterator(pkgRoot)) {
+                if (!fs::is_regular_file(entry.path())
+                 && !fs::is_symlink(entry.path()))
+                {
+                    continue;
+                }
+                auto rel = fs::relative(entry.path(), pkgRoot);
+                // recordPath is absolute on the target system
+                std::string recordPath = (fs::path("/") / rel).string();
+                if (!db_.logFile(meta.name, recordPath)) {
+                    std::cerr << "\033[31merror:\033[0m Failed logging file '"
+                              << recordPath << "'.\n";
+                    rollback();
+                    return false;
+                }
+                installedFiles.emplace_back(fs::path(rootDir_) / rel);
+            }
         }
     }
+
 
     // 13) Commit transaction
     if (!db_.commitTransaction()) {

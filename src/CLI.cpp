@@ -62,8 +62,6 @@ void CLI::run() {
         rootPrefix.pop_back();
     }
     fs::path dbDir = fs::path(rootPrefix).string() + "/var/lib/anemo/";
-    std::cout << bootstrapDir_ << std::endl;
-    std::cout << dbDir << "\n";
     std::error_code ec;
     if (!fs::exists(dbDir)) {
         fs::create_directories(dbDir, ec);

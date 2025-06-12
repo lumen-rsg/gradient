@@ -13,7 +13,6 @@ Database::~Database() {
 }
 
 bool Database::open() {
-    std::cout << "Opening database file '" << path_ << "'\n";
     return sqlite3_open(path_.c_str(), &db_) == SQLITE_OK;
 }
 

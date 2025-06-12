@@ -247,24 +247,6 @@ bool Database::markBroken(const std::string& pkg) {
         return true;
     }
 
-    bool Database::removeReverseDependencies(const std::string& pkgName) {
-        const char* sql =
-          "DELETE FROM dependencies WHERE dependency = ?;";
-        sqlite3_stmt* stmt = nullptr;
-        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-            std::cerr << "DB error: failed to prepare removeReverseDependencies: "
-                      << sqlite3_errmsg(db_) << "\n";
-            return false;
-        }
-        sqlite3_bind_text(stmt, 1, pkgName.c_str(), -1, SQLITE_TRANSIENT);
-        bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
-        if (!ok) {
-            std::cerr << "DB error: failed to delete reverse-deps: "
-                      << sqlite3_errmsg(db_) << "\n";
-        }
-        sqlite3_finalize(stmt);
-        return ok;
-    }
     std::vector<std::string> Database::getBrokenPackages() const {
     std::vector<std::string> result;
     const char* sql = "SELECT name FROM broken_packages;";
@@ -311,6 +293,34 @@ bool Database::markBroken(const std::string& pkg) {
     }
     sqlite3_finalize(stmt);
     return ok;
+}
+
+    std::vector<PackageInfo> Database::listPackages() const {
+    std::vector<PackageInfo> out;
+    const char* sql = R"(
+      SELECT p.name, p.version, p.arch,
+             (b.name IS NOT NULL) AS broken
+        FROM packages p
+   LEFT JOIN broken_packages b
+          ON p.name = b.name
+    ORDER BY p.name;
+    )";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        std::cerr << "DB error: listPackages prepare failed: "
+                  << sqlite3_errmsg(db_) << "\n";
+        return out;
+    }
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        PackageInfo pi;
+        pi.name    = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        pi.version = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        pi.arch    = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        pi.broken  = sqlite3_column_int(stmt, 3) != 0;
+        out.push_back(std::move(pi));
+    }
+    sqlite3_finalize(stmt);
+    return out;
 }
 
 } // namespace anemo

@@ -8,6 +8,15 @@
 
 namespace anemo {
 
+    // A little struct to hold what we need for `list`
+    struct PackageInfo {
+        std::string name;
+        std::string version;
+        std::string arch;
+        bool broken;
+    };
+
+
     class Database {
     public:
         Database(const std::string& path);
@@ -27,7 +36,6 @@ namespace anemo {
         bool removeFiles(const std::string& packageName);
         bool deletePackage(const std::string& packageName);
         bool markBroken(const std::string& packageName);
-        bool removeReverseDependencies(const std::string& pkgName);
 
         // Existing APIs
         bool isInstalled(const std::string& name, const std::string& version) const;
@@ -43,6 +51,7 @@ namespace anemo {
         [[nodiscard]] std::vector<std::string> getDependencies(const std::string& packageName) const;
         /// Remove a package from the broken_packages table
         bool removeBroken(const std::string& packageName);
+        [[nodiscard]] std::vector<PackageInfo> listPackages() const;
 
     private:
         sqlite3* db_;

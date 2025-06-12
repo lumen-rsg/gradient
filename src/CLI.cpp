@@ -165,12 +165,40 @@ void CLI::run() {
             }
         }
     }
-    else if (cmd == "list") {
-        std::cout << "\033[32minfo:\033[0m list command invoked\n";
-    }
+
     else if (cmd == "info") {
-        std::cout << "\033[32minfo:\033[0m info command invoked\n";
-    }
+         if (args.empty()) {
+            std::cerr << "\033[31merror:\033[0m 'info' requires a package name\n";
+            return;
+            }
+
+        // Index installed packages by name
+        auto pkgs = db.listPackages();
+        std::unordered_map<std::string, PackageInfo> idx;
+        for (auto& p : pkgs) idx[p.name] = p;
+
+        for (auto& name : args) {
+            auto it = idx.find(name);
+            if (it == idx.end()) {
+                std::cerr << "\033[31merror:\033[0m Package '"
+                << name << "' is not installed\n";
+                continue;
+                }
+            auto& pkg = it->second;
+            if (parseOutput_) {
+                // name|version|arch
+                std::cout
+                << pkg.name    << '|'
+                << pkg.version << '|'
+                << pkg.arch    << "\n";
+                } else {
+                    std::cout << "\n"
+                    << "\033[1;36m📄 Package:\033[0m \033[1m" << pkg.name << "\033[0m\n"
+                    << "  \033[1mVersion:\033[0m " << pkg.version << "\n"
+                    << "  \033[1mArch:\033[0m    " << pkg.arch << "\n";
+                    }
+            }
+        }
     else if (cmd == "query") {
         std::cout << "\033[32minfo:\033[0m query command invoked\n";
     }

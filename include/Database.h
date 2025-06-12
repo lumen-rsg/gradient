@@ -36,6 +36,14 @@ namespace anemo {
         bool commitTransaction();
         bool rollbackTransaction();
 
+        // ** New for audit **
+        /// List all packages currently marked broken
+        [[nodiscard]] std::vector<std::string> getBrokenPackages() const;
+        /// Fetch the runtime dependencies (the deps: list) of a given package
+        [[nodiscard]] std::vector<std::string> getDependencies(const std::string& packageName) const;
+        /// Remove a package from the broken_packages table
+        bool removeBroken(const std::string& packageName);
+
     private:
         sqlite3* db_;
         std::string path_;

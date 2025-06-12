@@ -126,7 +126,44 @@ void CLI::run() {
         std::cout << "\033[32minfo:\033[0m system-update command invoked\n";
     }
     else if (cmd == "audit") {
-        std::cout << "\033[32minfo:\033[0m audit command invoked\n";
+        // 1) Fetch broken packages
+        auto broken = db.getBrokenPackages();
+        if (broken.empty()) {
+            std::cout << "\033[32minfo:\033[0m No broken packages found.\n";
+            return;
+        }
+
+        // 2) Display them
+        std::cout << "\033[31mbroken packages:\033[0m\n";
+        for (auto& pkg : broken) {
+            std::cout << "  - " << pkg << "\n";
+        }
+
+        // 3) Re-check dependencies & clear fixed ones
+        std::vector<std::string> fixed;
+        for (auto& pkg : broken) {
+            auto deps = db.getDependencies(pkg);
+            bool allOk = true;
+            for (auto& dep : deps) {
+                if (!db.isInstalled(dep, "")) {
+                    allOk = false;
+                    break;
+                }
+            }
+            if (allOk) {
+                if (db.removeBroken(pkg)) {
+                    fixed.push_back(pkg);
+                }
+            }
+        }
+
+        // 4) Show results
+        if (!fixed.empty()) {
+            std::cout << "\033[32minfo:\033[0m Packages now fixed:\n";
+            for (auto& pkg : fixed) {
+                std::cout << "  + " << pkg << "\n";
+            }
+        }
     }
     else if (cmd == "list") {
         std::cout << "\033[32minfo:\033[0m list command invoked\n";

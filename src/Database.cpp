@@ -44,30 +44,36 @@ bool Database::rollbackTransaction() {
     return true;
 }
 
-bool Database::initSchema() {
+    bool Database::initSchema() {
     const char* sql = R"(
     PRAGMA foreign_keys = ON;
+
     CREATE TABLE IF NOT EXISTS packages (
       name           TEXT PRIMARY KEY,
       version        TEXT NOT NULL,
       arch           TEXT NOT NULL,
       install_script TEXT
     );
+
+    -- Note: dependency column has no foreign key constraint
+    -- so we can delete the referenced package row freely.
     CREATE TABLE IF NOT EXISTS dependencies (
       package    TEXT NOT NULL,
       dependency TEXT NOT NULL,
-      FOREIGN KEY(package)    REFERENCES packages(name) ON DELETE CASCADE,
-      FOREIGN KEY(dependency) REFERENCES packages(name)
+      FOREIGN KEY(package) REFERENCES packages(name) ON DELETE CASCADE
     );
+
     CREATE TABLE IF NOT EXISTS files (
       package  TEXT NOT NULL,
       filepath TEXT NOT NULL,
       FOREIGN KEY(package) REFERENCES packages(name) ON DELETE CASCADE
     );
+
     CREATE TABLE IF NOT EXISTS broken_packages (
       name TEXT PRIMARY KEY
     );
     )";
+
     char* err = nullptr;
     bool ok = sqlite3_exec(db_, sql, nullptr, nullptr, &err) == SQLITE_OK;
     if (!ok) {
@@ -259,6 +265,52 @@ bool Database::markBroken(const std::string& pkg) {
         sqlite3_finalize(stmt);
         return ok;
     }
+    std::vector<std::string> Database::getBrokenPackages() const {
+    std::vector<std::string> result;
+    const char* sql = "SELECT name FROM broken_packages;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* txt = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            if (txt) result.emplace_back(txt);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return result;
+}
 
+    std::vector<std::string> Database::getDependencies(const std::string& packageName) const {
+    std::vector<std::string> result;
+    const char* sql =
+      "SELECT dependency FROM dependencies WHERE package = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, packageName.c_str(), -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* txt = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            if (txt) result.emplace_back(txt);
+        }
+    }
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+    bool Database::removeBroken(const std::string& packageName) {
+    const char* sql = "DELETE FROM broken_packages WHERE name = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        std::cerr << "DB error: failed to prepare removeBroken: "
+                  << sqlite3_errmsg(db_) << "\n";
+        return false;
+    }
+    sqlite3_bind_text(stmt, 1, packageName.c_str(), -1, SQLITE_TRANSIENT);
+    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+    if (!ok) {
+        std::cerr << "DB error: failed to delete broken_packages entry: "
+                  << sqlite3_errmsg(db_) << "\n";
+    }
+    sqlite3_finalize(stmt);
+    return ok;
+}
 
 } // namespace anemo

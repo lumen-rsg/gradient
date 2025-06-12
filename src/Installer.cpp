@@ -275,12 +275,12 @@ bool Installer::removePackage(const std::string& name) {
         return false;
     }
 
-    if (!db_.removeReverseDependencies(name)) {
-        std::cerr << "\033[31merror:\033[0m Failed to remove reverse‐dependency records for '"
-                  << name << "'.\n";
-        db_.rollbackTransaction();
-        return false;
-    }
+    // if (!db_.removeReverseDependencies(name)) {
+    //     std::cerr << "\033[31merror:\033[0m Failed to remove reverse‐dependency records for '"
+    //               << name << "'.\n";
+    //     db_.rollbackTransaction();
+    //     return false;
+    // }
 
     // 9) Run post-remove hook
     if (!script.empty() && fs::exists(script)) {

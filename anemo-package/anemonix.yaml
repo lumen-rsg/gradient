@@ -1,0 +1,30 @@
+name: "anemo"
+version: "2.0.0-1"
+arch: "x86_64"
+
+# Runtime dependencies
+deps:
+  - sqlite          # for the local package database
+  - curl            # for repo sync and downloads (fallback for wget)
+  - wget            # for package downloads
+  - coreutils       # for /bin/install, tar, and other core utilities
+  - glibc           # the C standard library
+  - yaml-cpp        # to parse YAML metadata
+
+# Build-time dependencies
+makedepends:
+  - cmake           # to configure the build
+  - gcc             # C++23 compiler
+  - ninja           # fast build backend
+
+# No known conflicts, nor replacements
+conflicts: []
+replaces: []
+
+description: "anemo is a lightweight package manager written in C++23. it's the core of elementOS."
+
+# anemo epoch three is here. it was six months of prototyping and three repositories.
+# lend us a VDS please!
+# with much love, cv2.
+
+# elementOS team - 2025

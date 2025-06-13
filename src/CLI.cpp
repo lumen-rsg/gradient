@@ -31,7 +31,7 @@ CLI::CLI(int argc, char* argv[])
 
 void CLI::run() {
     // Define global flags
-    cxxopts::Options opts("anemo", "Anemo package manager");
+    cxxopts::Options opts("anemo", "anemo package manager - epoch III. (version 2.0)");
     opts.positional_help("<command> [args]");
     opts.allow_unrecognised_options();
     opts.add_options()

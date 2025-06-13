@@ -23,7 +23,7 @@ namespace anemo {
     }
 
     void DependencyResolver::resolveRecursive(const std::string& pkgName, std::vector<std::string>& order) {
-        if (std::find(visited_.begin(), visited_.end(), pkgName) != visited_.end()) return;
+        if (std::ranges::find(visited_, pkgName) != visited_.end()) return;
         visited_.push_back(pkgName);
 
         // fetch metadata from repo (latest version)

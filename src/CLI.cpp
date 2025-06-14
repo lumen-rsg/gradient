@@ -338,34 +338,59 @@ for (auto const& r : args) {
             return;
         }
 
-        if (installOrder.empty()) {
-            std::cout << "\033[32minfo:\033[0m all requested packages are already installed\n";
-            return;
-        }
+
         fs::path tmp = fs::temp_directory_path() / "anemo_pkgs";
         if (!fs::exists(tmp)) {
             fs::create_directory(tmp);
         }
 
-        // Initialize libcurl once
-        curl_global_init(CURL_GLOBAL_ALL);
-        int total = (int)installOrder.size();
-        std::mutex printMutex;
+        // Initialize curl once
+        curl_global_init(CURL_GLOBAL_DEFAULT);
 
-        for (int i = 0; i < total; ++i) {
+        // We'll collect futures here
+        std::vector<std::future<bool>> futures;
+        futures.reserve(installOrder.size());
+
+        // A mutex to serialize progress‐bar prints
+        static std::mutex printMutex;
+
+        // Launch one download task per package
+        for (size_t i = 0; i < installOrder.size(); ++i) {
             const auto& p = installOrder[i];
             std::string url = p.repoUrl + "/" + p.filename;
-            fs::path out    = tmp / p.filename;
+            fs::path out   = tmp / p.filename;
 
-            DownloadContext ctx{i+1, total, p.pkgname + "-" + p.pkgver, &printMutex};
-            if (!downloadWithCurl(url, out.string(), ctx)) {
-                std::cerr << "\n\033[31merror:\033[0m download failed; aborting install\n";
-                curl_global_cleanup();
-                return;
+            // Copy the context by value so each thread has its own
+            DownloadContext ctx{
+                int(i+1),
+                int(installOrder.size()),
+                p.pkgname + "-" + p.pkgver,
+                &printMutex
+            };
+
+            // async launch
+            futures.push_back(std::async(std::launch::async,
+                [url, out, ctx]() mutable {
+                    return downloadWithCurl(url, out.string(), ctx);
+                }
+            ));
+        }
+
+        // Wait for all to finish
+        bool allOk = true;
+        for (auto& fut : futures) {
+            if (!fut.get()) {
+                allOk = false;
+                break;
             }
         }
 
-        curl_global_cleanup();  // clean up curl globally
+        curl_global_cleanup();
+
+        if (!allOk) {
+            std::cerr << "\n\033[31merror:\033[0m one or more downloads failed; aborting install\n";
+            return;
+        }
 
         std::unordered_set<std::string> staged;
         for (auto const& p : installOrder)

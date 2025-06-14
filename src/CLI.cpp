@@ -280,49 +280,49 @@ void CLI::run() {
         for (size_t i = 0; i < total; ++i) {
         const auto& p = installOrder[i];
         futures.push_back(std::async(std::launch::async, [&, i]() {
-                auto url = p.repoUrl + "/" + p.filename;
-                auto out = tmp / p.filename;
+            auto url = p.repoUrl + "/" + p.filename;
+            auto out = tmp / p.filename;
 
-                // Print start line
-                {
-                    std::lock_guard<std::mutex> lk(cout_mtx);
-                    std::cout << "\n  ↓ [" << (i+1) << "/" << total << "] "
-                              << "downloading " << p.pkgname << "-" << p.pkgver
+            // Print start line
+            {
+                std::lock_guard<std::mutex> lk(cout_mtx);
+                std::cout << "\n  ↓ [" << (i+1) << "/" << total << "] "
+                          << "downloading " << p.pkgname << "-" << p.pkgver
+                          << "\n";
+            }
+
+            // Download with wget
+                std::string cmd = "wget --quiet -c -t  0 --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=30 -O '" + out.string() + "' '" + url + "'";
+
+            int rc = std::system(cmd.c_str());
+
+            // Print result line
+            {
+                std::lock_guard<std::mutex> lk(cout_mtx);
+                if (rc == 0) {
+                    std::cout << "  ✔ [" << (i+1) << "/" << total << "] "
+                              << "downloaded  " << p.pkgname << "-" << p.pkgver
+                              << "\n";
+                } else {
+                    std::cout << "  ✖ [" << (i+1) << "/" << total << "] "
+                              << "failed      " << p.pkgname << "-" << p.pkgver
                               << "\n";
                 }
+            }
 
-                // Download with wget
-                    std::string cmd = "wget --quiet -c -t  0 --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=30 -O '" + out.string() + "' '" + url + "'";
+            // Update and redraw progress bar
+            size_t done = ++completed;
+            size_t filled = (done * barWidth) / total;
+            {
+                std::lock_guard<std::mutex> lk(cout_mtx);
+                std::cout << "  Progress: ["
+                          << std::string(filled, '=')
+                          << std::string(barWidth - filled, ' ')
+                          << "] " << (done * 100 / total) << "%\r"
+                          << std::flush;
+            }
 
-                int rc = std::system(cmd.c_str());
-
-                // Print result line
-                {
-                    std::lock_guard<std::mutex> lk(cout_mtx);
-                    if (rc == 0) {
-                        std::cout << "  ✔ [" << (i+1) << "/" << total << "] "
-                                  << "downloaded  " << p.pkgname << "-" << p.pkgver
-                                  << "\n";
-                    } else {
-                        std::cout << "  ✖ [" << (i+1) << "/" << total << "] "
-                                  << "failed      " << p.pkgname << "-" << p.pkgver
-                                  << "\n";
-                    }
-                }
-
-                // Update and redraw progress bar
-                size_t done = ++completed;
-                size_t filled = (done * barWidth) / total;
-                {
-                    std::lock_guard<std::mutex> lk(cout_mtx);
-                    std::cout << "  Progress: ["
-                              << std::string(filled, '=')
-                              << std::string(barWidth - filled, ' ')
-                              << "] " << (done * 100 / total) << "%\r"
-                              << std::flush;
-                }
-
-                return rc == 0;
+            return rc == 0;
             }));
         }
 

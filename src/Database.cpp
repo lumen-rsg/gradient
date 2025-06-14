@@ -3,6 +3,8 @@
 #include <filesystem>
 #include <iostream>
 
+#include "tools.h"
+
 namespace anemo {
 
 Database::Database(const std::string& path)
@@ -32,6 +34,24 @@ bool Database::commitTransaction() {
         return false;
     }
     return true;
+}
+
+    bool Database::getPackageVersion(const std::string& pkg, std::string& out) {
+    const char* sql = "SELECT version FROM packages WHERE name = ?;";
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
+        return false;
+    sqlite3_bind_text(stmt,1,pkg.c_str(),-1,SQLITE_TRANSIENT);
+    bool ok = false;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* txt = (const char*)sqlite3_column_text(stmt,0);
+        if (txt) {
+            out = txt;
+            ok = true;
+        }
+    }
+    sqlite3_finalize(stmt);
+    return ok;
 }
 
 bool Database::rollbackTransaction() {
@@ -366,5 +386,41 @@ bool Database::markBroken(const std::string& pkg) {
     sqlite3_finalize(stmt);
     return out;
 }
+
+
+    bool Database::providesSatisfies(const Tools::Constraint& c) const {
+        // find any row whose "provided" raw string starts with c.name
+        // e.g. "sdl2" matches "sdl2=2.32.56"
+        const char* sql =
+          "SELECT provided FROM provides WHERE provided LIKE ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "DB error: providesSatisfies prepare failed: "
+                      << sqlite3_errmsg(db_) << "\n";
+            return false;
+        }
+
+        // bind "sdl2%" to catch both "sdl2" and "sdl2=1.2"
+        std::string like = c.name + "%";
+        sqlite3_bind_text(stmt, 1, like.c_str(), -1, SQLITE_TRANSIENT);
+
+        bool ok = false;
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char* txt = (const char*)sqlite3_column_text(stmt, 0);
+            if (!txt) continue;
+            std::string rawProv(txt);
+            // parse it, e.g. rawProv="sdl2=2.32.56" → pc.name="sdl2", pc.op="=", pc.ver="2.32.56"
+            Tools::Constraint pc = Tools::parseConstraint(rawProv);
+            if (pc.name != c.name)
+                continue;   // e.g. "sdl23" won't match "sdl2"
+            // if no op on the dependency, any provider works
+            if (c.op.empty() || Tools::evalConstraint(pc.version, c)) {
+                ok = true;
+                break;
+            }
+        }
+        sqlite3_finalize(stmt);
+        return ok;
+    }
 
 } // namespace anemo

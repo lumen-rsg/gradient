@@ -6,6 +6,9 @@
 #include <vector>
 #include <sqlite3.h>
 
+#include "tools.h"
+
+
 namespace anemo {
 
     // A little struct to hold what we need for `list`
@@ -44,6 +47,9 @@ namespace anemo {
         bool logFile(const std::string& pkg, const std::string& path);
         bool beginTransaction();
         bool commitTransaction();
+
+        bool getPackageVersion(const std::string &pkg, std::string &out);
+
         bool rollbackTransaction();
 
         // ** New for audit **
@@ -54,6 +60,8 @@ namespace anemo {
         /// Remove a package from the broken_packages table
         bool removeBroken(const std::string& packageName);
         [[nodiscard]] std::vector<PackageInfo> listPackages() const;
+
+        bool providesSatisfies(const Tools::Constraint &c) const;
 
     private:
         sqlite3* db_;

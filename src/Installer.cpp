@@ -11,6 +11,9 @@
 #include <iostream>
 #include <unordered_set>
 #include <vector>
+#include <regex>
+
+#include "tools.h"
 
 namespace fs = std::filesystem;
 
@@ -42,6 +45,8 @@ std::string Installer::makeTempDir() {
     return dir ? std::string(dir) : std::string{};
 }
 
+
+
 bool Installer::installArchive(const std::string& archivePath) {
     warnings_ = false;
 
@@ -61,50 +66,65 @@ bool Installer::installArchive(const std::string& archivePath) {
         return false;
     }
 
-    // 3) Dependencies check (skip anything in meta.provides, skip SONAMEs)
     for (const auto& raw_dep : meta.deps) {
-        // Strip off any version specifier (e.g. "foo=1.2" → "foo")
-        std::string dep = raw_dep;
-        if (auto eq = dep.find('='); eq != std::string::npos) {
-            dep.resize(eq);
-        }
-        // If this package itself Provides it, we're good
-        if (std::find(meta.provides.begin(),
-                      meta.provides.end(),
-                      dep) != meta.provides.end())
-        {
-            continue;
-        }
-        // Skip SONAME deps (we don't treat .so names as package names here)
-        if (dep.size() > 3 && dep.substr(dep.size()-3) == ".so") {
-            continue;
-        }
+    Tools::Constraint c = Tools::parseConstraint(raw_dep);
+    std::string& dep = c.name;
 
-        if (db_.isProvided(dep)) {
-            continue;
-        }
+    // skip SONAMEs
+    if (dep.find(".so") != std::string::npos) continue;
 
-        if (staged_.count(dep)) {
-            continue;
-        }
+    // skip if package itself provides it
+    if (std::find(meta.provides.begin(), meta.provides.end(), dep)
+        != meta.provides.end())
+    {
+        continue;
+    }
+    // skip if any installed pkg Provides it
+    if (db_.isProvided(dep)) continue;
 
-        // Otherwise it must be installed
-        if (!db_.isInstalled(dep, "")) {
-            std::cerr << "\033[33mwarning:\033[0m Missing dependency '"
-                      << raw_dep << "'.\n";
+        if (db_.providesSatisfies(c)) {
+            continue;   // dependency is satisfied by some provider at the right version
+        }
+    // skip if staged install
+    if (staged_.count(dep)) continue;
+
+    // if installed, check version
+    std::string instVer;
+    if (db_.getPackageVersion(dep, instVer)) {
+        if (Tools::evalConstraint(instVer, c)) {
+            continue;  // satisfied
+        } else {
+            std::cerr << "\033[33mwarning:\033[0m dependency '"
+                      << raw_dep << "' demands version " << c.op
+                      << c.version << ", but found " << instVer << "\n";
             if (!force_) {
-                std::cerr << "\033[31merror:\033[0m Aborting due to missing dependency.\n";
+                std::cerr << "\033[31merror:\033[0m Aborting due to version mismatch.\n";
                 return false;
             }
             warnings_ = true;
+            continue;
         }
     }
 
-    // 4) Conflicts check
-    for (const auto& c : meta.conflicts) {
-        if (db_.isInstalled(c, "")) {
-            std::cerr << "\033[33mwarning:\033[0m Conflict with installed package '"
-                      << c << "'.\n";
+    // not installed at all
+    std::cerr << "\033[33mwarning:\033[0m Missing dependency '"
+              << raw_dep << "'\n";
+    if (!force_) {
+        std::cerr << "\033[31merror:\033[0m Aborting due to missing dependency.\n";
+        return false;
+    }
+    warnings_ = true;
+}
+
+// === 4) Conflicts check with version support ===
+for (const auto& raw_conf : meta.conflicts) {
+    Tools::Constraint c = Tools::parseConstraint(raw_conf);
+    std::string& conf = c.name;
+    std::string instVer;
+    if (db_.getPackageVersion(conf, instVer)) {
+        if (Tools::evalConstraint(instVer, c)) {
+            std::cerr << "\033[33mwarning:\033[0m conflict with installed '"
+                      << raw_conf << "'\n";
             if (!force_) {
                 std::cerr << "\033[31merror:\033[0m Aborting due to conflict.\n";
                 return false;
@@ -112,16 +132,20 @@ bool Installer::installArchive(const std::string& archivePath) {
             warnings_ = true;
         }
     }
+}
 
-    // 5) Replaces logic
-    for (const auto& r : meta.replaces) {
-        if (db_.isInstalled(r, "")) {
-            std::cout << "\033[32minfo:\033[0m Replacing package '"
-                      << r << "'.\n";
-            removePackage(r);
-        }
+// === 5) Replaces logic with version support ===
+for (const auto& raw_rep : meta.replaces) {
+    Tools::Constraint c = Tools::parseConstraint(raw_rep);
+    std::string& rep = c.name;
+    std::string instVer;
+    if (db_.getPackageVersion(rep, instVer) &&
+        Tools::evalConstraint(instVer, c))
+    {
+        std::cout << "\033[32minfo:\033[0m Replacing '" << raw_rep << "'\n";
+        removePackage(rep);
     }
-
+}
     // 6) Extract entire archive
     auto tmp = makeTempDir();
     if (tmp.empty() || !TarHandler::extract(archivePath, tmp)) {

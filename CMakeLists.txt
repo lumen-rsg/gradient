@@ -9,10 +9,22 @@ set(CMAKE_C_COMPILER clang)
 find_package(yaml-cpp REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SQLITE3 REQUIRED sqlite3)
+find_package(CURL REQUIRED)
 
-# CLI11 or cxxopts (header-only) must be provided in include/
-include_directories(${YAML_CPP_INCLUDE_DIRS} ${SQLITE3_INCLUDE_DIRS} include)
-link_directories(${YAML_CPP_LIBRARY_DIRS} ${SQLITE3_LIBRARY_DIRS})
+# Include directories
+include_directories(
+        ${YAML_CPP_INCLUDE_DIRS}
+        ${SQLITE3_INCLUDE_DIRS}
+        ${CURL_INCLUDE_DIRS}
+        include
+)
+
+# Library search paths
+link_directories(
+        ${YAML_CPP_LIBRARY_DIRS}
+        ${SQLITE3_LIBRARY_DIRS}
+        ${CURL_LIBRARY_DIRS}
+)
 
 enable_testing()
 
@@ -28,11 +40,16 @@ add_executable(anemo
         src/ScriptExecutor.cpp
         src/DependencyResolver.cpp
         include/CLI.h
-        src/CLI.cpp
         include/cxxopts.h
+        include/tools.h
+        include/DownloadHelper.h
 )
 
-target_link_libraries(anemo yaml-cpp ${SQLITE3_LIBRARIES})
+target_link_libraries(anemo
+        yaml-cpp
+        ${SQLITE3_LIBRARIES}
+        ${CURL_LIBRARIES}
+)
 
 # install target
 install(TARGETS anemo RUNTIME DESTINATION bin)

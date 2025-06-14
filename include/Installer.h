@@ -11,6 +11,7 @@
 #include "Database.h"
 #include "Repository.h"
 #include "DependencyResolver.h"
+#include <regex>
 
 namespace anemo {
 

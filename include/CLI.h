@@ -13,9 +13,6 @@ namespace anemo {
         CLI(int argc, char* argv[]);
         void run();
     private:
-        void cmdInstall(); void cmdRemove(); void cmdAddRepo(); void cmdSyncRepo();
-        void cmdRemoveRepo(); void cmdSystemUpdate(); void cmdAudit(); void cmdList();
-        void cmdInfo(); void cmdQuery();
         bool force_ = false;
         std::string bootstrapDir_;
         bool parseOutput_ = false;

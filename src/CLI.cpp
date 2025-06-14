@@ -106,10 +106,9 @@ void CLI::run() {
             }
         }
     }
-
     else if (cmd == "install") {
         static std::mutex cout_mtx;
-    // 1) Locate repos base directory
+        // 1) Locate repos base directory
         fs::path repoBase = fs::path("/var/lib/anemo/repos");
         if (!fs::exists(repoBase) || !fs::is_directory(repoBase)) {
             std::cerr << "\033[31merror:\033[0m system repos directory '"
@@ -117,89 +116,89 @@ void CLI::run() {
             return;
         }
 
-    if (!fs::exists(repoBase) || !fs::is_directory(repoBase)) {
-        std::cerr << "\033[31merror:\033[0m repos directory '"
-                  << repoBase << "' does not exist\n";
-        return;
-    }
-
-    // 2) Build a mapping of package name -> list of available repo entries
-    struct RepoPkg {
-        std::string pkgname, pkgver, arch, filename, repoUrl;
-        std::vector<std::string> depends;
-        std::vector<std::string> provides;
-        int priority;
-        std::string repoName;
-    };
-    std::unordered_map<std::string, std::vector<RepoPkg>> pkgMap;
-
-    for (auto& entry : fs::directory_iterator(repoBase)) {
-        if (entry.path().extension() != ".json") continue;
-        std::string repoName = entry.path().stem();
-        // Load the repo descriptor (name/url/priority)
-        YAML::Node desc;
-        try { desc = YAML::LoadFile(entry.path().string()); }
-        catch (const YAML::Exception& e) {
-            std::cerr << "\033[31merror:\033[0m parsing " << entry.path().filename()
-                      << ": " << e.what() << "\n";
-            continue;
+        if (!fs::exists(repoBase) || !fs::is_directory(repoBase)) {
+            std::cerr << "\033[31merror:\033[0m repos directory '"
+                      << repoBase << "' does not exist\n";
+            return;
         }
-        std::string url      = desc["url"].as<std::string>();
-        int priority         = desc["priority"].as<int>();
 
-        // Load the remote index we synced earlier
-        fs::path indexFile = repoBase / repoName / "repo.json";
-        if (!fs::exists(indexFile)) continue;
+        // 2) Build a mapping of package name -> list of available repo entries
+        struct RepoPkg {
+            std::string pkgname, pkgver, arch, filename, repoUrl;
+            std::vector<std::string> depends;
+            std::vector<std::string> provides;
+            int priority;
+            std::string repoName;
+        };
+        std::unordered_map<std::string, std::vector<RepoPkg>> pkgMap;
 
-        YAML::Node idx;
-        try { idx = YAML::LoadFile(indexFile.string()); }
-        catch (const YAML::Exception& e) {
-            std::cerr << "\033[31merror:\033[0m parsing " << indexFile.filename()
-                      << ": " << e.what() << "\n";
-            continue;
-        }
-        auto packages = idx["packages"];
-        if (!packages || !packages.IsSequence()) continue;
-
-        for (const auto& node : packages) {
-            RepoPkg rp;
-            rp.pkgname   = node["pkgname"].as<std::string>();
-            rp.pkgver    = node["pkgver"].as<std::string>();
-            rp.arch      = node["arch"].as<std::string>();
-            rp.filename  = node["filename"].as<std::string>();
-            rp.repoUrl   = url;
-            rp.priority  = priority;
-            rp.repoName  = repoName;
-
-            // Dependencies
-            if (node["depends"]) {
-                for (const auto& dnode : node["depends"])
-                    rp.depends.push_back(dnode.as<std::string>());
+        for (auto& entry : fs::directory_iterator(repoBase)) {
+            if (entry.path().extension() != ".json") continue;
+            std::string repoName = entry.path().stem();
+            // Load the repo descriptor (name/url/priority)
+            YAML::Node desc;
+            try { desc = YAML::LoadFile(entry.path().string()); }
+            catch (const YAML::Exception& e) {
+                std::cerr << "\033[31merror:\033[0m parsing " << entry.path().filename()
+                          << ": " << e.what() << "\n";
+                continue;
             }
+            std::string url      = desc["url"].as<std::string>();
+            int priority         = desc["priority"].as<int>();
 
-            // Provides (strip version suffix after '=')
-            if (node["provides"]) {
-                for (const auto& pnode : node["provides"]) {
-                    std::string prov = pnode.as<std::string>();
-                    if (auto eq = prov.find('='); eq != std::string::npos)
-                        prov.resize(eq);
-                    rp.provides.push_back(prov);
+            // Load the remote index we synced earlier
+            fs::path indexFile = repoBase / repoName / "repo.json";
+            if (!fs::exists(indexFile)) continue;
+
+            YAML::Node idx;
+            try { idx = YAML::LoadFile(indexFile.string()); }
+            catch (const YAML::Exception& e) {
+                std::cerr << "\033[31merror:\033[0m parsing " << indexFile.filename()
+                          << ": " << e.what() << "\n";
+                continue;
+            }
+            auto packages = idx["packages"];
+            if (!packages || !packages.IsSequence()) continue;
+
+            for (const auto& node : packages) {
+                RepoPkg rp;
+                rp.pkgname   = node["pkgname"].as<std::string>();
+                rp.pkgver    = node["pkgver"].as<std::string>();
+                rp.arch      = node["arch"].as<std::string>();
+                rp.filename  = node["filename"].as<std::string>();
+                rp.repoUrl   = url;
+                rp.priority  = priority;
+                rp.repoName  = repoName;
+
+                // Dependencies
+                if (node["depends"]) {
+                    for (const auto& dnode : node["depends"])
+                        rp.depends.push_back(dnode.as<std::string>());
+                }
+
+                // Provides (strip version suffix after '=')
+                if (node["provides"]) {
+                    for (const auto& pnode : node["provides"]) {
+                        std::string prov = pnode.as<std::string>();
+                        if (auto eq = prov.find('='); eq != std::string::npos)
+                            prov.resize(eq);
+                        rp.provides.push_back(prov);
+                    }
+                }
+
+                // 1) Always index under its real name
+                pkgMap[rp.pkgname].push_back(rp);
+
+                // 2) Also index under each provided name, but skip the case prov==pkgname
+                for (const auto& prov : rp.provides) {
+                    if (prov == rp.pkgname)
+                        continue;    // <-- this line avoids self‐cycle on "libcap"
+                    pkgMap[prov].push_back(rp);
                 }
             }
-
-            // 1) Always index under its real name
-            pkgMap[rp.pkgname].push_back(rp);
-
-            // 2) Also index under each provided name, but skip the case prov==pkgname
-            for (const auto& prov : rp.provides) {
-                if (prov == rp.pkgname)
-                    continue;    // <-- this line avoids self‐cycle on "libcap"
-                pkgMap[prov].push_back(rp);
-            }
         }
-    }
 
-    // 3) Resolve dependencies (DFS, picking highest-priority entries)
+        // 3) Resolve dependencies (DFS, picking highest-priority entries)
         std::vector<RepoPkg> installOrder;
         std::unordered_set<std::string> visited, inStack;
         auto dfs = [&](auto& self, const std::string& pkgName) -> bool {
@@ -257,113 +256,112 @@ void CLI::run() {
                 return;
         }
 
-    if (installOrder.empty()) {
-        std::cout << "\033[32minfo:\033[0m all requested packages are already installed\n";
-        return;
-    }
+        if (installOrder.empty()) {
+            std::cout << "\033[32minfo:\033[0m all requested packages are already installed\n";
+            return;
+        }
         fs::path tmp = fs::temp_directory_path() / "anemo_pkgs";
 
-std::atomic<size_t> completed{0};
-const size_t total = installOrder.size();
-const size_t barWidth = 30;
+        std::atomic<size_t> completed{0};
+        const size_t total = installOrder.size();
+        const size_t barWidth = 30;
 
-// Print initial progress bar at 0%
-{
-    std::lock_guard<std::mutex> lk(cout_mtx);
-    std::cout << "  Progress: ["
-              << std::string(barWidth, ' ')
-              << "] 0%\r" << std::flush;
-}
-
-std::vector<std::future<bool>> futures;
-futures.reserve(total);
-
-for (size_t i = 0; i < total; ++i) {
-    const auto& p = installOrder[i];
-    futures.push_back(std::async(std::launch::async, [&, i]() {
-        auto url = p.repoUrl + "/" + p.filename;
-        auto out = tmp / p.filename;
-
-        // Print start line
-        {
-            std::lock_guard<std::mutex> lk(cout_mtx);
-            std::cout << "\n  ↓ [" << (i+1) << "/" << total << "] "
-                      << "downloading " << p.pkgname << "-" << p.pkgver
-                      << "\n";
-        }
-
-        // Download with wget
-            std::string cmd = "wget --quiet -c -t  0 --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=30 -O '" + out.string() + "' '" + url + "'";
-
-        int rc = std::system(cmd.c_str());
-
-        // Print result line
-        {
-            std::lock_guard<std::mutex> lk(cout_mtx);
-            if (rc == 0) {
-                std::cout << "  ✔ [" << (i+1) << "/" << total << "] "
-                          << "downloaded  " << p.pkgname << "-" << p.pkgver
-                          << "\n";
-            } else {
-                std::cout << "  ✖ [" << (i+1) << "/" << total << "] "
-                          << "failed      " << p.pkgname << "-" << p.pkgver
-                          << "\n";
-            }
-        }
-
-        // Update and redraw progress bar
-        size_t done = ++completed;
-        size_t filled = (done * barWidth) / total;
+        // Print initial progress bar at 0%
         {
             std::lock_guard<std::mutex> lk(cout_mtx);
             std::cout << "  Progress: ["
-                      << std::string(filled, '=')
-                      << std::string(barWidth - filled, ' ')
-                      << "] " << (done * 100 / total) << "%\r"
-                      << std::flush;
+                      << std::string(barWidth, ' ')
+                      << "] 0%\r" << std::flush;
         }
 
-        return rc == 0;
-    }));
-}
+        std::vector<std::future<bool>> futures;
+        futures.reserve(total);
 
-// Wait for all
-for (auto& fut : futures) {
-    if (!fut.get()) {
-        std::cerr << "\n\033[31merror:\033[0m download failed; aborting install\n";
-        return;
-    }
-}
+        for (size_t i = 0; i < total; ++i) {
+        const auto& p = installOrder[i];
+        futures.push_back(std::async(std::launch::async, [&, i]() {
+                auto url = p.repoUrl + "/" + p.filename;
+                auto out = tmp / p.filename;
 
-// Final newline after bar
-{
-    std::lock_guard<std::mutex> lk(cout_mtx);
-    std::cout << "\n";
-}
+                // Print start line
+                {
+                    std::lock_guard<std::mutex> lk(cout_mtx);
+                    std::cout << "\n  ↓ [" << (i+1) << "/" << total << "] "
+                              << "downloading " << p.pkgname << "-" << p.pkgver
+                              << "\n";
+                }
+
+                // Download with wget
+                    std::string cmd = "wget --quiet -c -t  0 --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=30 -O '" + out.string() + "' '" + url + "'";
+
+                int rc = std::system(cmd.c_str());
+
+                // Print result line
+                {
+                    std::lock_guard<std::mutex> lk(cout_mtx);
+                    if (rc == 0) {
+                        std::cout << "  ✔ [" << (i+1) << "/" << total << "] "
+                                  << "downloaded  " << p.pkgname << "-" << p.pkgver
+                                  << "\n";
+                    } else {
+                        std::cout << "  ✖ [" << (i+1) << "/" << total << "] "
+                                  << "failed      " << p.pkgname << "-" << p.pkgver
+                                  << "\n";
+                    }
+                }
+
+                // Update and redraw progress bar
+                size_t done = ++completed;
+                size_t filled = (done * barWidth) / total;
+                {
+                    std::lock_guard<std::mutex> lk(cout_mtx);
+                    std::cout << "  Progress: ["
+                              << std::string(filled, '=')
+                              << std::string(barWidth - filled, ' ')
+                              << "] " << (done * 100 / total) << "%\r"
+                              << std::flush;
+                }
+
+                return rc == 0;
+            }));
+        }
+
+        // Wait for all
+        for (auto& fut : futures) {
+            if (!fut.get()) {
+                std::cerr << "\n\033[31merror:\033[0m download failed; aborting install\n";
+                return;
+            }
+        }
+
+        // Final newline after bar
+        {
+            std::lock_guard<std::mutex> lk(cout_mtx);
+            std::cout << "\n";
+        }
 
         std::unordered_set<std::string> staged;
         for (auto const& p : installOrder)
             staged.insert(p.pkgname);
 
-    // 5) Install each downloaded archive in order
+        // 5) Install each downloaded archive in order
         std::string installRoot = bootstrapDir_.empty() ? "/" : bootstrapDir_;
         Installer inst(db, repo, force_, installRoot, staged);
 
-    for (auto const& p : installOrder) {
-        fs::path pkgPath = tmp / p.filename;
-        std::cout << "\n\033[1;34m📦 Installing \033[1m"
-                  << p.pkgname << "-" << p.pkgver << "\033[0m\n";
-        if (!inst.installArchive(pkgPath.string())) {
-            std::cerr << "\033[31merror:\033[0m Failed to install '"
-                      << p.pkgname << "'\n";
-            return;
+        for (auto const& p : installOrder) {
+            fs::path pkgPath = tmp / p.filename;
+            std::cout << "\n\033[1;34m📦 Installing \033[1m"
+                      << p.pkgname << "-" << p.pkgver << "\033[0m\n";
+            if (!inst.installArchive(pkgPath.string())) {
+                std::cerr << "\033[31merror:\033[0m Failed to install '"
+                          << p.pkgname << "'\n";
+                return;
+            }
         }
+
+        std::cout << "\033[32msuccess:\033[0m All packages installed.\n";
+
     }
-
-    std::cout << "\033[32msuccess:\033[0m All packages installed.\n";
-
-    }
-
     else if (cmd == "remove") {
         if (!bootstrapDir_.empty()) {
             std::cerr << "\033[31merror:\033[0m Cannot remove packages when bootstrapping.\n";
@@ -597,7 +595,6 @@ for (auto& fut : futures) {
             }
         }
     }
-
     else if (cmd == "info") {
          if (args.empty()) {
             std::cerr << "\033[31merror:\033[0m 'info' requires a package name\n";

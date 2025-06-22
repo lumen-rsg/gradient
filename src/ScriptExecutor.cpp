@@ -9,7 +9,7 @@
 #include <iostream>
 
 namespace fs = std::filesystem;
-namespace anemo {
+namespace gradient {
     void ScriptExecutor::runScript(const std::string& scriptPath,
                                    const std::string& hookName,
                                    const std::string& chrootDir)

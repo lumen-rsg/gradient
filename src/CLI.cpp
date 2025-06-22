@@ -21,7 +21,7 @@
 
 namespace fs = std::filesystem;
 
-namespace anemo {
+namespace gradient {
 
 CLI::CLI(int argc, char* argv[])
     : argc_(argc)
@@ -41,7 +41,7 @@ void checkUID() {
 
 void CLI::run() {
     // Define global flags
-    cxxopts::Options opts("anemo", "anemo package manager - epoch III. (version 2.0)");
+    cxxopts::Options opts("gradient", "gradient package manager - epoch III. (version 2.0)");
     opts.positional_help("<command> [args]");
     opts.allow_unrecognised_options();
     opts.add_options()
@@ -71,8 +71,7 @@ void CLI::run() {
     if (!rootPrefix.empty()) {
         rootPrefix.pop_back();
     }
-    std::cout << rootPrefix << "\n";
-    fs::path dbDir = fs::path(rootPrefix).string() + "/var/lib/anemo/";
+    fs::path dbDir = fs::path(rootPrefix).string() + "/var/lib/gradient/";
     std::error_code ec;
     if (!fs::exists(dbDir)) {
         fs::create_directories(dbDir, ec);
@@ -82,9 +81,9 @@ void CLI::run() {
             return;
         }
     }
-    fs::path dbPath = dbDir / "anemo.db";
+    fs::path dbPath = dbDir / "gradient.db";
 
-    fs::path repoDir = fs::path(rootPrefix).string() + "/var/lib/anemo/repos";
+    fs::path repoDir = fs::path(rootPrefix).string() + "/var/lib/gradient/repos";
     if (!fs::exists(repoDir)) {
         fs::create_directories(repoDir, ec);
         if (ec) {
@@ -122,7 +121,7 @@ void CLI::run() {
         checkUID();
         static std::mutex cout_mtx;
         // 1) Locate repos base directory
-        fs::path repoBase = fs::path("/var/lib/anemo/repos");
+        fs::path repoBase = fs::path("/var/lib/gradient/repos");
         if (!fs::exists(repoBase) || !fs::is_directory(repoBase)) {
             std::cerr << "\033[31merror:\033[0m system repos directory '"
                       << repoBase << "' does not exist\n";
@@ -140,7 +139,7 @@ void CLI::run() {
             std::string pkgname, pkgver, arch, filename, repoUrl;
             std::vector<std::string> depends;
             std::vector<std::string> provides;
-            int priority;
+            int priority{};
             std::string repoName;
         };
         std::unordered_map<std::string, std::vector<RepoPkg>> pkgMap;
@@ -156,7 +155,7 @@ void CLI::run() {
                           << ": " << e.what() << "\n";
                 continue;
             }
-            std::string url      = desc["url"].as<std::string>();
+            auto url             = desc["url"].as<std::string>();
             int priority         = desc["priority"].as<int>();
 
             // Load the remote index we synced earlier
@@ -192,7 +191,7 @@ void CLI::run() {
                 // Provides (strip version suffix after '=')
                 if (node["provides"]) {
                     for (const auto& pnode : node["provides"]) {
-                        std::string prov = pnode.as<std::string>();
+                        auto prov = pnode.as<std::string>();
                         if (auto eq = prov.find('='); eq != std::string::npos)
                             prov.resize(eq);
                         rp.provides.push_back(prov);
@@ -217,16 +216,15 @@ void CLI::run() {
 
     auto dfs = [&](auto& self, const std::string& raw_req) -> bool {
     // 1) Parse name + optional version operator
-    Tools::Constraint c = Tools::parseConstraint(raw_req);
+    const Tools::Constraint c = Tools::parseConstraint(raw_req);
     const std::string& name = c.name;
 
     // 2) If we've already visited or the package is installed and satisfies the version, skip it
-    if (visited.count(name))
+    if (visited.contains(name))
         return true;
 
-    std::string instVer;
-    if (db.getPackageVersion(name, instVer) &&
-        (c.op.empty() || Tools::evalConstraint(instVer, c)))
+    if (std::string instVer; db.getPackageVersion(name, instVer) &&
+                             (c.op.empty() || Tools::evalConstraint(instVer, c)))
     {
         visited.insert(name);
         return true;
@@ -339,7 +337,7 @@ for (auto const& r : args) {
         }
 
 
-        fs::path tmp = fs::temp_directory_path() / "anemo_pkgs";
+        fs::path tmp = fs::temp_directory_path() / "grad_pkgs";
         if (!fs::exists(tmp)) {
             fs::create_directory(tmp);
         }
@@ -433,7 +431,7 @@ for (auto const& r : args) {
     }
     else if (cmd == "add-repo") {
         checkUID();
-        // Usage: anemo add-repo <name> <url> [priority]
+        // Usage: gradient add-repo <name> <url> [priority]
         if (args.size() < 2) {
             std::cerr << "\033[31merror:\033[0m 'add-repo' requires a <name> and a <url>\n";
             return;
@@ -453,20 +451,20 @@ for (auto const& r : args) {
         }
 
         // Determine repos directory (bootstrapDir_ is a member of CLI)
-        fs::path repoDir = bootstrapDir_.empty()
-            ? fs::path("/var/lib/anemo/repos")
-            : fs::path(bootstrapDir_) / "var/lib/anemo/repos";
+        fs::path repo_dir = bootstrapDir_.empty()
+            ? fs::path("/var/lib/gradient/repos")
+            : fs::path(bootstrapDir_) / "var/lib/gradient/repos";
 
-        std::error_code ec;
-        fs::create_directories(repoDir, ec);
-        if (ec) {
+        std::error_code error_code;
+        fs::create_directories(repo_dir, error_code);
+        if (error_code) {
             std::cerr << "\033[31merror:\033[0m unable to create directory '"
-                      << repoDir << "': " << ec.message() << "\n";
+                      << repo_dir << "': " << error_code.message() << "\n";
             return;
         }
 
         // Check for existing repo file
-        fs::path repoFile = repoDir / (name + ".json");
+        fs::path repoFile = repo_dir / (name + ".json");
         if (fs::exists(repoFile)) {
             std::cerr << "\033[31merror:\033[0m repository '"
                       << name << "' already exists\n";
@@ -481,8 +479,8 @@ for (auto const& r : args) {
             return;
         }
         out << "{\n";
-        out << "  \"name\":     \""   << name     << "\",\n";
-        out << "  \"url\":      \""   << url      << "\",\n";
+        out << R"(  "name":     ")"   << name     << "\",\n";
+        out << R"(  "url":      ")"   << url      << "\",\n";
         out << "  \"priority\": "     << priority << "\n";
         out << "}\n";
         out.close();
@@ -495,8 +493,8 @@ for (auto const& r : args) {
         checkUID();
         // Determine the repos directory
     fs::path repoBase = bootstrapDir_.empty()
-        ? fs::path("/var/lib/anemo/repos")
-        : fs::path(bootstrapDir_) / "var/lib/anemo/repos";
+        ? fs::path("/var/lib/gradient/repos")
+        : fs::path(bootstrapDir_) / "var/lib/gradient/repos";
 
     if (!fs::exists(repoBase) || !fs::is_directory(repoBase)) {
         std::cerr << "\033[31merror:\033[0m repos directory '"
@@ -508,7 +506,7 @@ for (auto const& r : args) {
               << repoBase << "\033[0m\n";
 
     for (auto& entry : fs::directory_iterator(repoBase)) {
-        auto repoFile = entry.path();
+        const auto& repoFile = entry.path();
         if (repoFile.extension() != ".json")
             continue;  // skip non-JSON
 
@@ -522,17 +520,17 @@ for (auto const& r : args) {
             continue;
         }
 
-        std::string name     = repoDesc["name"].as<std::string>();
-        std::string url      = repoDesc["url"].as<std::string>();
+        auto name     = repoDesc["name"].as<std::string>();
+        auto url      = repoDesc["url"].as<std::string>();
 
         // Prepare local storage
         fs::path localDir    = repoBase / name;
         fs::path indexFile   = localDir / "repo.json";
-        std::error_code ec;
-        fs::create_directories(localDir, ec);
-        if (ec) {
+        std::error_code error_code;
+        fs::create_directories(localDir, error_code);
+        if (error_code) {
             std::cerr << "\033[31merror:\033[0m Cannot create directory '"
-                      << localDir << "': " << ec.message() << "\n";
+                      << localDir << "': " << error_code.message() << "\n";
             continue;
         }
 
@@ -541,10 +539,9 @@ for (auto const& r : args) {
         std::cout << "  🔄 " << name
                   << ": fetching " << remoteIndexUrl << " ... " << std::flush;
 
-        std::string cmd = "curl -fsSL '" + remoteIndexUrl +
+        std::string command = "curl -fsSL '" + remoteIndexUrl +
                           "' -o '" + indexFile.string() + "'";
-        int rc = std::system(cmd.c_str());
-        if (rc != 0) {
+        if (int rc = std::system(command.c_str()); rc != 0) {
             std::cout << "\033[31m✖ failed\033[0m\n";
         } else {
             std::cout << "\033[32m✔ done\033[0m\n";
@@ -555,8 +552,8 @@ for (auto const& r : args) {
     }
     else if (cmd == "remove-repo") {
         checkUID();
-        // Usage: anemo remove-repo <name>
-        if (args.size() < 1) {
+        // Usage: gradient remove-repo <name>
+        if (args.empty()) {
             std::cerr << "\033[31merror:\033[0m 'remove-repo' requires a repository name\n";
             return;
         }
@@ -564,8 +561,8 @@ for (auto const& r : args) {
 
         // Determine the repos directory
         fs::path repoBase = bootstrapDir_.empty()
-            ? fs::path("/var/lib/anemo/repos")
-            : fs::path(bootstrapDir_) / "var/lib/anemo/repos";
+            ? fs::path("/var/lib/gradient/repos")
+            : fs::path(bootstrapDir_) / "var/lib/gradient/repos";
 
         // Ensure it exists
         if (!fs::exists(repoBase) || !fs::is_directory(repoBase)) {
@@ -583,11 +580,11 @@ for (auto const& r : args) {
         }
 
         // Remove the JSON descriptor
-        std::error_code ec;
-        fs::remove(repoJson, ec);
-        if (ec) {
+        std::error_code error_code;
+        fs::remove(repoJson, error_code);
+        if (error_code) {
             std::cerr << "\033[31merror:\033[0m failed to remove '"
-                      << repoJson << "': " << ec.message() << "\n";
+                      << repoJson << "': " << error_code.message() << "\n";
             return;
         }
         std::cout << "\033[32minfo:\033[0m removed repository descriptor '"
@@ -596,10 +593,10 @@ for (auto const& r : args) {
         // Remove any synced data directory (<repoBase>/<name>/)
         fs::path dataDir = repoBase / name;
         if (fs::exists(dataDir)) {
-            fs::remove_all(dataDir, ec);
-            if (ec) {
+            fs::remove_all(dataDir, error_code);
+            if (error_code) {
                 std::cerr << "\033[33mwarning:\033[0m failed to remove data directory '"
-                          << dataDir << "': " << ec.message() << "\n";
+                          << dataDir << "': " << error_code.message() << "\n";
             } else {
                 std::cout << "\033[32minfo:\033[0m removed repository data at '"
                           << dataDir << "'\n";
@@ -687,7 +684,7 @@ for (auto const& r : args) {
             }
         }
     else if (cmd == "query") {
-            // Usage: anemo query <pattern>
+            // Usage: gradient query <pattern>
     if (args.empty()) {
         std::cerr << "\033[31merror:\033[0m 'query' requires a search pattern\n";
         return;
@@ -697,8 +694,8 @@ for (auto const& r : args) {
 
     // Find repos directory
     fs::path repoBase = bootstrapDir_.empty()
-        ? fs::path("/var/lib/anemo/repos")
-        : fs::path(bootstrapDir_) / "var/lib/anemo/repos";
+        ? fs::path("/var/lib/gradient/repos")
+        : fs::path(bootstrapDir_) / "var/lib/gradient/repos";
 
     if (!fs::exists(repoBase) || !fs::is_directory(repoBase)) {
         std::cerr << "\033[31merror:\033[0m repos directory '"
@@ -739,18 +736,18 @@ for (auto const& r : args) {
 
         bool printedHeader = false;
         for (const auto& pkg : packages) {
-            std::string name    = pkg["pkgname"].as<std::string>();
+            auto name    = pkg["pkgname"].as<std::string>();
             std::string lowName = name;
-            std::transform(lowName.begin(), lowName.end(), lowName.begin(), ::tolower);
+            std::ranges::transform(lowName, lowName.begin(), ::tolower);
 
             if (lowName.find(pattern) == std::string::npos)
                 continue;
 
             anyMatch = true;
-            std::string ver   = pkg["pkgver"].as<std::string>();
-            std::string arch  = pkg["arch"].as<std::string>();
-            std::string file  = pkg["filename"].as<std::string>();
-            std::string desc  = pkg["description"].as<std::string>();
+            auto ver   = pkg["pkgver"].as<std::string>();
+            auto arch  = pkg["arch"].as<std::string>();
+            auto file  = pkg["filename"].as<std::string>();
+            auto desc  = pkg["description"].as<std::string>();
 
             if (parseOutput_) {
                 // repo|name|version|arch|filename
@@ -824,4 +821,4 @@ for (auto const& r : args) {
     }
 }
 
-} // namespace anemo
+} // namespace gradient

@@ -1,4 +1,4 @@
-name: "anemo"
+name: "gradient"
 version: "2.0.0-1"
 arch: "x86_64"
 
@@ -7,7 +7,8 @@ deps:
   - sqlite          # for the local package database
   - curl            # for repo sync and downloads (fallback for wget)
   - wget            # for package downloads
-  - coreutils       # for /bin/install, tar, and other core utilities
+  - coreutils       # for /bin/install and other core utilities
+  - tar             # for the tar utility
   - glibc           # the C standard library
   - yaml-cpp        # to parse YAML metadata
 
@@ -21,10 +22,10 @@ makedepends:
 conflicts: []
 replaces: []
 
-description: "anemo is a lightweight package manager written in C++23. it's the core of elementOS."
+description: "gradient is a lightweight package manager written in C++23. it's the core of lumina."
 
-# anemo epoch three is here. it was six months of prototyping and three repositories.
+# gradient epoch three is here. it was six months of prototyping and three repositories.
 # lend us a VDS please!
 # with much love, cv2.
 
-# elementOS team - 2025
+# lumina team - 2025

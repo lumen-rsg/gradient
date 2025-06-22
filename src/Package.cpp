@@ -12,14 +12,14 @@
 
 namespace fs = std::filesystem;
 
-namespace anemo {
+namespace gradient {
 
     Package::Package(const std::string& archivePath)
       : archivePath_(archivePath) {}
 
     bool Package::loadMetadata() {
         // 1) Create a temporary directory for extraction
-        char tmpl[] = "/tmp/anemo_metaXXXXXX";
+        char tmpl[] = "/tmp/gradient_metaXXXXXX";
         char* tmpDirC = mkdtemp(tmpl);
         if (!tmpDirC) {
             std::cerr << "\033[31merror:\033[0m could not create temp dir for metadata\n";

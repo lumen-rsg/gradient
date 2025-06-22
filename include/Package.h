@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace anemo {
+namespace gradient {
     class Package {
     public:
         struct Metadata {

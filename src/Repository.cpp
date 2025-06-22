@@ -3,7 +3,7 @@
 //
 
 #include "Repository.h"
-namespace anemo {
+namespace gradient {
     Repository::Repository(const std::string& url,const std::string& localPath):url_(url),localPath_(localPath){}
     bool Repository::sync(){return true;}
     std::vector<Package::Metadata> Repository::listPackages() const{return {};}

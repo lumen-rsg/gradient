@@ -9,7 +9,7 @@
 #include <vector>
 #include <memory>
 #include "Package.h"
-namespace anemo {
+namespace gradient {
     class Repository {
     public:
         Repository(const std::string& url, const std::string& localPath);

@@ -6,7 +6,7 @@
 #define TARHANDLER_H
 
 #include <string>
-namespace anemo {
+namespace gradient {
     class TarHandler {
     public:
         static bool extract(const std::string& archive, const std::string& dest);

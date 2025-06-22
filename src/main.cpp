@@ -7,8 +7,8 @@
 
 #include "CLI.h"
 
-int main(int argc, char* argv[]) {
-    anemo::CLI cli(argc, argv);
+int main(const int argc, char* argv[]) {
+    gradient::CLI cli(argc, argv);
     cli.run();
     return 0;
 }

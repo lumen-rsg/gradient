@@ -7,7 +7,7 @@
 
 #include <string>
 
-namespace anemo {
+namespace gradient {
 
     class ScriptExecutor {
     public:

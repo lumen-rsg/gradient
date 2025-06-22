@@ -2,177 +2,175 @@
 #include "Database.h"
 #include <filesystem>
 #include <iostream>
+#include <utility>
 
 #include "tools.h"
 
-namespace anemo {
+namespace gradient {
 
-Database::Database(const std::string& path)
-  : db_(nullptr), path_(path) {}
+    Database::Database(std::string path)
+      : db_(nullptr), path_(std::move(path)) {}
 
-Database::~Database() {
-    if (db_) sqlite3_close(db_);
-}
-
-bool Database::open() {
-    return sqlite3_open(path_.c_str(), &db_) == SQLITE_OK;
-}
-
-    bool Database::beginTransaction() {
-    char* err = nullptr;
-    if (sqlite3_exec(db_, "BEGIN;", nullptr, nullptr, &err) != SQLITE_OK) {
-        sqlite3_free(err);
-        return false;
+    Database::~Database() {
+        if (db_) sqlite3_close(db_);
     }
-    return true;
-}
 
-bool Database::commitTransaction() {
-    char* err = nullptr;
-    if (sqlite3_exec(db_, "COMMIT;", nullptr, nullptr, &err) != SQLITE_OK) {
-        sqlite3_free(err);
-        return false;
+    bool Database::open() {
+        return sqlite3_open(path_.c_str(), &db_) == SQLITE_OK;
     }
-    return true;
-}
-
-    bool Database::getPackageVersion(const std::string& pkg, std::string& out) {
-    const char* sql = "SELECT version FROM packages WHERE name = ?;";
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
-        return false;
-    sqlite3_bind_text(stmt,1,pkg.c_str(),-1,SQLITE_TRANSIENT);
-    bool ok = false;
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        const char* txt = (const char*)sqlite3_column_text(stmt,0);
-        if (txt) {
-            out = txt;
-            ok = true;
+    bool Database::beginTransaction() const {
+        char* err = nullptr;
+        if (sqlite3_exec(db_, "BEGIN;", nullptr, nullptr, &err) != SQLITE_OK) {
+            sqlite3_free(err);
+            return false;
         }
+        return true;
     }
-    sqlite3_finalize(stmt);
-    return ok;
-}
 
-bool Database::rollbackTransaction() {
-    char* err = nullptr;
-    if (sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, &err) != SQLITE_OK) {
-        sqlite3_free(err);
-        return false;
+    bool Database::commitTransaction() const {
+        char* err = nullptr;
+        if (sqlite3_exec(db_, "COMMIT;", nullptr, nullptr, &err) != SQLITE_OK) {
+            sqlite3_free(err);
+            return false;
+        }
+        return true;
     }
-    return true;
-}
 
-    bool Database::initSchema() {
-    const char* sql = R"(
-    PRAGMA foreign_keys = ON;
-
-    CREATE TABLE IF NOT EXISTS packages (
-      name           TEXT PRIMARY KEY,
-      version        TEXT NOT NULL,
-      arch           TEXT NOT NULL,
-      install_script TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS dependencies (
-      package    TEXT NOT NULL,
-      dependency TEXT NOT NULL,
-      FOREIGN KEY(package) REFERENCES packages(name) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS provides (
-      package  TEXT NOT NULL,
-      provided TEXT NOT NULL,
-      FOREIGN KEY(package) REFERENCES packages(name) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS files (
-      package  TEXT NOT NULL,
-      filepath TEXT NOT NULL,
-      FOREIGN KEY(package) REFERENCES packages(name) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS broken_packages (
-      name TEXT PRIMARY KEY
-    );
-    )";
-    char* err = nullptr;
-    bool ok = sqlite3_exec(db_, sql, nullptr, nullptr, &err) == SQLITE_OK;
-    if (!ok) {
-        std::cerr << "DB schema error: " << err << "\n";
-        sqlite3_free(err);
+    bool Database::getPackageVersion(const std::string& pkg, std::string& out) const {
+        sqlite3_stmt* stmt = nullptr;
+        if (const auto sql = "SELECT version FROM packages WHERE name = ?;";
+            sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
+            return false;
+        sqlite3_bind_text(stmt,1,pkg.c_str(),-1,SQLITE_TRANSIENT);
+        bool ok = false;
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            if (const auto txt = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0))) {
+                out = txt;
+                ok = true;
+            }
+        }
+        sqlite3_finalize(stmt);
+        return ok;
     }
-    return ok;
-}
 
-bool Database::addPackage(const Package::Metadata& meta,
-                          const std::string& installScriptPath)
-{
-    // 1) Insert/replace into packages
-    const char* sql_pkg =
-      "INSERT OR REPLACE INTO packages(name,version,arch,install_script) "
-      "VALUES(?,?,?,?);";
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db_, sql_pkg, -1, &stmt, nullptr) != SQLITE_OK)
-        return false;
-    sqlite3_bind_text(stmt,1,meta.name.c_str(),-1,nullptr);
-    sqlite3_bind_text(stmt,2,meta.version.c_str(),-1,nullptr);
-    sqlite3_bind_text(stmt,3,meta.arch.c_str(),-1,nullptr);
-    if (installScriptPath.empty())
-        sqlite3_bind_null(stmt,4);
-    else
-        sqlite3_bind_text(stmt,4,installScriptPath.c_str(),-1,nullptr);
-    bool ok = sqlite3_step(stmt) == SQLITE_DONE;
-    sqlite3_finalize(stmt);
-    if (!ok) return false;
+    bool Database::rollbackTransaction() const {
+        char* err = nullptr;
+        if (sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, &err) != SQLITE_OK) {
+            sqlite3_free(err);
+            return false;
+        }
+        return true;
+    }
 
-    // 2) Refresh dependencies
-    const char* sql_del = "DELETE FROM dependencies WHERE package = ?;";
-    if (sqlite3_prepare_v2(db_, sql_del, -1, &stmt, nullptr) != SQLITE_OK)
-        return false;
-    sqlite3_bind_text(stmt,1,meta.name.c_str(),-1,nullptr);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
+    bool Database::initSchema() const {
+        const auto sql = R"(
+        PRAGMA foreign_keys = ON;
 
-    const char* sql_ins =
-      "INSERT INTO dependencies(package,dependency) VALUES(?,?);";
-    for (auto& d : meta.deps) {
-        if (sqlite3_prepare_v2(db_, sql_ins, -1, &stmt, nullptr) != SQLITE_OK)
-            continue;
+        CREATE TABLE IF NOT EXISTS packages (
+          name           TEXT PRIMARY KEY,
+          version        TEXT NOT NULL,
+          arch           TEXT NOT NULL,
+          install_script TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS dependencies (
+          package    TEXT NOT NULL,
+          dependency TEXT NOT NULL,
+          FOREIGN KEY(package) REFERENCES packages(name) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS provides (
+          package  TEXT NOT NULL,
+          provided TEXT NOT NULL,
+          FOREIGN KEY(package) REFERENCES packages(name) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS files (
+          package  TEXT NOT NULL,
+          filepath TEXT NOT NULL,
+          FOREIGN KEY(package) REFERENCES packages(name) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS broken_packages (
+          name TEXT PRIMARY KEY
+        );
+        )";
+        char* err = nullptr;
+        const bool ok = sqlite3_exec(db_, sql, nullptr, nullptr, &err) == SQLITE_OK;
+        if (!ok) {
+            std::cerr << "DB schema error: " << err << "\n";
+            sqlite3_free(err);
+        }
+        return ok;
+    }
+
+    bool Database::addPackage(const Package::Metadata& meta,
+                              const std::string& installScriptPath) const {
+        // 1) Insert/replace into packages
+        const auto sql_pkg =
+          "INSERT OR REPLACE INTO packages(name,version,arch,install_script) "
+          "VALUES(?,?,?,?);";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql_pkg, -1, &stmt, nullptr) != SQLITE_OK)
+            return false;
         sqlite3_bind_text(stmt,1,meta.name.c_str(),-1,nullptr);
-        sqlite3_bind_text(stmt,2,d.c_str(),-1,nullptr);
+        sqlite3_bind_text(stmt,2,meta.version.c_str(),-1,nullptr);
+        sqlite3_bind_text(stmt,3,meta.arch.c_str(),-1,nullptr);
+        if (installScriptPath.empty())
+            sqlite3_bind_null(stmt,4);
+        else
+            sqlite3_bind_text(stmt,4,installScriptPath.c_str(),-1,nullptr);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        if (!ok) return false;
+
+        // 2) Refresh dependencies
+        if (const auto sql_del = "DELETE FROM dependencies WHERE package = ?;";
+            sqlite3_prepare_v2(db_, sql_del, -1, &stmt, nullptr) != SQLITE_OK)
+            return false;
+        sqlite3_bind_text(stmt,1,meta.name.c_str(),-1,nullptr);
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
+
+        for (auto& d : meta.deps) {
+            const auto sql_ins =
+                    "INSERT INTO dependencies(package,dependency) VALUES(?,?);";
+            if (sqlite3_prepare_v2(db_, sql_ins, -1, &stmt, nullptr) != SQLITE_OK)
+                continue;
+            sqlite3_bind_text(stmt,1,meta.name.c_str(),-1,nullptr);
+            sqlite3_bind_text(stmt,2,d.c_str(),-1,nullptr);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+        if (!addProvides(meta)) return false;
+        return true;
     }
-    if (!addProvides(meta)) return false;
-    return true;
-}
 
-    bool Database::addProvides(const Package::Metadata& meta) {
-    sqlite3_stmt* stmt = nullptr;
-    // 1) delete old provides for this package
-    if (sqlite3_prepare_v2(db_,
-          "DELETE FROM provides WHERE package = ?;", -1, &stmt, nullptr) != SQLITE_OK)
-        return false;
-    sqlite3_bind_text(stmt, 1, meta.name.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-
-    // 2) insert each provided name
-    const char* sql = "INSERT INTO provides(package, provided) VALUES(?,?);";
-    for (auto const& prov : meta.provides) {
-        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
+    bool Database::addProvides(const Package::Metadata& meta) const {
+        sqlite3_stmt* stmt = nullptr;
+        // 1) delete old provides for this package
+        if (sqlite3_prepare_v2(db_,
+              "DELETE FROM provides WHERE package = ?;", -1, &stmt, nullptr) != SQLITE_OK)
             return false;
         sqlite3_bind_text(stmt, 1, meta.name.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 2, prov.c_str(),       -1, SQLITE_TRANSIENT);
-        if (sqlite3_step(stmt) != SQLITE_DONE) {
-            sqlite3_finalize(stmt);
-            return false;
-        }
+        sqlite3_step(stmt);
         sqlite3_finalize(stmt);
+
+        // 2) insert each provided name
+        for (auto const& prov : meta.provides) {
+            if (const auto sql = "INSERT INTO provides(package, provided) VALUES(?,?);";
+                sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
+                return false;
+            sqlite3_bind_text(stmt, 1, meta.name.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, 2, prov.c_str(),       -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(stmt) != SQLITE_DONE) {
+                sqlite3_finalize(stmt);
+                return false;
+            }
+            sqlite3_finalize(stmt);
+        }
+        return true;
     }
-    return true;
-}
 
     bool Database::isProvided(const std::string& name) const {
     sqlite3_stmt* stmt = nullptr;
@@ -190,102 +188,106 @@ bool Database::addPackage(const Package::Metadata& meta,
     return result;
 }
 
-std::vector<std::string> Database::getReverseDependencies(const std::string& pkg) {
-    std::vector<std::string> result;
-    const char* sql =
-      "SELECT package FROM dependencies WHERE dependency = ?;";
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt,1,pkg.c_str(),-1,nullptr);
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            auto txt = reinterpret_cast<const char*>(sqlite3_column_text(stmt,0));
-            if (txt) result.emplace_back(txt);
+    std::vector<std::string> Database::getReverseDependencies(const std::string& packageName) const {
+        std::vector<std::string> result;
+        const auto sql =
+          "SELECT package FROM dependencies WHERE dependency = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt,1,packageName.c_str(),-1,nullptr);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                if (auto txt = reinterpret_cast<const char*>(sqlite3_column_text(stmt,0))) result.emplace_back(txt);
+            }
+            sqlite3_finalize(stmt);
         }
-        sqlite3_finalize(stmt);
+        return result;
     }
-    return result;
-}
 
-std::vector<std::string> Database::getFiles(const std::string& pkg) {
-    std::vector<std::string> result;
-    const char* sql =
-      "SELECT filepath FROM files WHERE package = ?;";
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt,1,pkg.c_str(),-1,nullptr);
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            auto txt = reinterpret_cast<const char*>(sqlite3_column_text(stmt,0));
-            if (txt) result.emplace_back(txt);
+    std::vector<std::string> Database::getFiles(const std::string& packageName) const {
+        std::vector<std::string> result;
+        const auto sql =
+          "SELECT filepath FROM files WHERE package = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt,1,packageName.c_str(),-1,nullptr);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                if (auto txt = reinterpret_cast<const char*>(sqlite3_column_text(stmt,0))) result.emplace_back(txt);
+            }
+            sqlite3_finalize(stmt);
         }
-        sqlite3_finalize(stmt);
+        return result;
     }
-    return result;
-}
 
-std::string Database::getInstallScript(const std::string& pkg) {
-    std::string result;
-    const char* sql =
-      "SELECT install_script FROM packages WHERE name = ?;";
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt,1,pkg.c_str(),-1,nullptr);
-        if (sqlite3_step(stmt) == SQLITE_ROW) {
-            auto txt = reinterpret_cast<const char*>(sqlite3_column_text(stmt,0));
-            if (txt) result = txt;
+    std::string Database::getInstallScript(const std::string& packageName) const {
+        std::string result;
+        const auto sql =
+          "SELECT install_script FROM packages WHERE name = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt,1,packageName.c_str(),-1,nullptr);
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                if (const auto txt = reinterpret_cast<const char*>(sqlite3_column_text(stmt,0))) result = txt;
+            }
+            sqlite3_finalize(stmt);
         }
-        sqlite3_finalize(stmt);
+        return result;
     }
-    return result;
-}
 
-bool Database::removeFiles(const std::string& pkg) {
-    const char* sql = "DELETE FROM files WHERE package = ?;";
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
-        return false;
-    sqlite3_bind_text(stmt,1,pkg.c_str(),-1,nullptr);
-    bool ok = sqlite3_step(stmt) == SQLITE_DONE;
-    sqlite3_finalize(stmt);
-    return ok;
-}
+    bool Database::removeFiles(const std::string& packageName) const {
+        sqlite3_stmt* stmt = nullptr;
 
-bool Database::deletePackage(const std::string& pkg) {
-    const char* sql = "DELETE FROM packages WHERE name = ?;";
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
-        return false;
-    sqlite3_bind_text(stmt,1,pkg.c_str(),-1,nullptr);
-    bool ok = sqlite3_step(stmt) == SQLITE_DONE;
-    sqlite3_finalize(stmt);
-    return ok;
-}
+        if (const auto sql = "DELETE FROM files WHERE package = ?;";
+            sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
+            return false;
 
-bool Database::markBroken(const std::string& pkg) {
-    const char* sql =
-      "INSERT OR IGNORE INTO broken_packages(name) VALUES(?);";
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
-        return false;
-    sqlite3_bind_text(stmt,1,pkg.c_str(),-1,nullptr);
-    bool ok = sqlite3_step(stmt) == SQLITE_DONE;
-    sqlite3_finalize(stmt);
-    return ok;
-}
+        sqlite3_bind_text(stmt,1,packageName.c_str(),-1,nullptr);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+
+        return ok;
+    }
+
+    bool Database::deletePackage(const std::string& packageName) const {
+        sqlite3_stmt* stmt = nullptr;
+
+        if (const auto sql = "DELETE FROM packages WHERE name = ?;";
+            sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
+            return false;
+
+        sqlite3_bind_text(stmt,1,packageName.c_str(),-1,nullptr);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+
+        return ok;
+    }
+
+    bool Database::markBroken(const std::string& packageName) const {
+        const auto sql =
+          "INSERT OR IGNORE INTO broken_packages(name) VALUES(?);";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
+            return false;
+        sqlite3_bind_text(stmt,1,packageName.c_str(),-1,nullptr);
+        const bool ok = sqlite3_step(stmt) == SQLITE_DONE;
+        sqlite3_finalize(stmt);
+        return ok;
+    }
 
     bool Database::isInstalled(const std::string& name, const std::string& version) const {
-    const char* sql = "SELECT COUNT(1) FROM packages WHERE name = ?";
-    sqlite3_stmt* stmt;
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
-    sqlite3_bind_text(stmt, 1, name.c_str(), -1, nullptr);
-    bool found = false;
-    if (sqlite3_step(stmt) == SQLITE_ROW) found = sqlite3_column_int(stmt, 0) > 0;
-    sqlite3_finalize(stmt);
-    return found;
-}
+        sqlite3_stmt* stmt;
+        if (const auto sql = "SELECT COUNT(1) FROM packages WHERE name = ?";
+            sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
 
-    bool Database::logFile(const std::string& pkgName, const std::string& filePath) {
+        sqlite3_bind_text(stmt, 1, name.c_str(), -1, nullptr);
+        bool found = false;
+        if (sqlite3_step(stmt) == SQLITE_ROW) found = sqlite3_column_int(stmt, 0) > 0;
+        sqlite3_finalize(stmt);
+        return found;
+    }
+
+    bool Database::logFile(const std::string& pkg, const std::string& path) const {
         // Note: our table columns are "package" and "filepath"
-        const char* sql =
+        const auto sql =
           "INSERT INTO files(package, filepath) VALUES(?,?);";
 
         sqlite3_stmt* stmt = nullptr;
@@ -296,8 +298,8 @@ bool Database::markBroken(const std::string& pkg) {
             return false;
         }
 
-        sqlite3_bind_text(stmt, 1, pkgName.c_str(),  -1, SQLITE_TRANSIENT);
-        sqlite3_bind_text(stmt, 2, filePath.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 1, pkg.c_str(),  -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, path.c_str(), -1, SQLITE_TRANSIENT);
 
         rc = sqlite3_step(stmt);
         if (rc != SQLITE_DONE) {
@@ -312,86 +314,81 @@ bool Database::markBroken(const std::string& pkg) {
     }
 
     std::vector<std::string> Database::getBrokenPackages() const {
-    std::vector<std::string> result;
-    const char* sql = "SELECT name FROM broken_packages;";
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            const char* txt = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-            if (txt) result.emplace_back(txt);
+        std::vector<std::string> result;
+        sqlite3_stmt* stmt = nullptr;
+        if (const auto sql = "SELECT name FROM broken_packages;";
+            sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                if (auto txt = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0))) result.emplace_back(txt);
+            }
         }
+        sqlite3_finalize(stmt);
+        return result;
     }
-    sqlite3_finalize(stmt);
-    return result;
-}
 
     std::vector<std::string> Database::getDependencies(const std::string& packageName) const {
-    std::vector<std::string> result;
-    const char* sql =
-      "SELECT dependency FROM dependencies WHERE package = ?;";
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-        sqlite3_bind_text(stmt, 1, packageName.c_str(), -1, SQLITE_TRANSIENT);
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            const char* txt = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-            if (txt) result.emplace_back(txt);
+        std::vector<std::string> result;
+        const auto sql =
+          "SELECT dependency FROM dependencies WHERE package = ?;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, packageName.c_str(), -1, SQLITE_TRANSIENT);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                if (auto txt = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0))) result.emplace_back(txt);
+            }
         }
+        sqlite3_finalize(stmt);
+        return result;
     }
-    sqlite3_finalize(stmt);
-    return result;
-}
 
-    bool Database::removeBroken(const std::string& packageName) {
-    const char* sql = "DELETE FROM broken_packages WHERE name = ?;";
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        std::cerr << "DB error: failed to prepare removeBroken: "
-                  << sqlite3_errmsg(db_) << "\n";
-        return false;
+    bool Database::removeBroken(const std::string& packageName) const {
+        sqlite3_stmt* stmt = nullptr;
+        if (const auto sql = "DELETE FROM broken_packages WHERE name = ?;";
+            sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "DB error: failed to prepare removeBroken: "
+                      << sqlite3_errmsg(db_) << "\n";
+            return false;
+        }
+        sqlite3_bind_text(stmt, 1, packageName.c_str(), -1, SQLITE_TRANSIENT);
+        const bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
+        if (!ok) {
+            std::cerr << "DB error: failed to delete broken_packages entry: "
+                      << sqlite3_errmsg(db_) << "\n";
+        }
+        sqlite3_finalize(stmt);
+        return ok;
     }
-    sqlite3_bind_text(stmt, 1, packageName.c_str(), -1, SQLITE_TRANSIENT);
-    bool ok = (sqlite3_step(stmt) == SQLITE_DONE);
-    if (!ok) {
-        std::cerr << "DB error: failed to delete broken_packages entry: "
-                  << sqlite3_errmsg(db_) << "\n";
-    }
-    sqlite3_finalize(stmt);
-    return ok;
-}
 
     std::vector<PackageInfo> Database::listPackages() const {
-    std::vector<PackageInfo> out;
-    const char* sql = R"(
-      SELECT p.name, p.version, p.arch,
-             (b.name IS NOT NULL) AS broken
-        FROM packages p
-   LEFT JOIN broken_packages b
-          ON p.name = b.name
-    ORDER BY p.name;
-    )";
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        std::cerr << "DB error: listPackages prepare failed: "
-                  << sqlite3_errmsg(db_) << "\n";
+        std::vector<PackageInfo> out;
+        const auto sql = R"(
+        SELECT p.name, p.version, p.arch, (b.name IS NOT NULL) AS broken FROM packages p
+        LEFT JOIN broken_packages b
+              ON p.name = b.name
+        ORDER BY p.name;
+        )";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+            std::cerr << "DB error: listPackages prepare failed: "
+                      << sqlite3_errmsg(db_) << "\n";
+            return out;
+        }
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            PackageInfo pi;
+            pi.name    = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            pi.version = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+            pi.arch    = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+            pi.broken  = sqlite3_column_int(stmt, 3) != 0;
+            out.push_back(std::move(pi));
+        }
+        sqlite3_finalize(stmt);
         return out;
     }
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        PackageInfo pi;
-        pi.name    = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-        pi.version = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        pi.arch    = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
-        pi.broken  = sqlite3_column_int(stmt, 3) != 0;
-        out.push_back(std::move(pi));
-    }
-    sqlite3_finalize(stmt);
-    return out;
-}
-
 
     bool Database::providesSatisfies(const Tools::Constraint& c) const {
         // find any row whose "provided" raw string starts with c.name
         // e.g. "sdl2" matches "sdl2=2.32.56"
-        const char* sql =
+        const auto sql =
           "SELECT provided FROM provides WHERE provided LIKE ?;";
         sqlite3_stmt* stmt = nullptr;
         if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK) {
@@ -401,12 +398,12 @@ bool Database::markBroken(const std::string& pkg) {
         }
 
         // bind "sdl2%" to catch both "sdl2" and "sdl2=1.2"
-        std::string like = c.name + "%";
+        const std::string like = c.name + "%";
         sqlite3_bind_text(stmt, 1, like.c_str(), -1, SQLITE_TRANSIENT);
 
         bool ok = false;
         while (sqlite3_step(stmt) == SQLITE_ROW) {
-            const char* txt = (const char*)sqlite3_column_text(stmt, 0);
+            const auto txt = reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0));
             if (!txt) continue;
             std::string rawProv(txt);
             // parse it, e.g. rawProv="sdl2=2.32.56" → pc.name="sdl2", pc.op="=", pc.ver="2.32.56"

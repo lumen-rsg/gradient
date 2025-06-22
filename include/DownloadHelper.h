@@ -11,7 +11,7 @@
 #include <mutex>
 #include <curl/curl.h>
 
-namespace anemo {
+namespace gradient {
 
 /// Context for a single download’s progress.
 struct DownloadContext {

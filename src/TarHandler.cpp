@@ -4,7 +4,7 @@
 
 #include "TarHandler.h"
 #include <cstdlib>
-namespace anemo {
+namespace gradient {
 
     bool TarHandler::extract(const std::string& archive, const std::string& dest) {
         std::string cmd = "tar -xf " + archive + " -C " + dest;

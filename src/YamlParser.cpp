@@ -10,7 +10,7 @@
 
 namespace fs = std::filesystem;
 
-namespace anemo {
+namespace gradient {
 
 bool YamlParser::parseMetadata(const std::string& path, Package::Metadata& meta) {
     // 1) Check file existence

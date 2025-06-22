@@ -11,7 +11,7 @@
 #include "Database.h"
 #include "Repository.h"
 
-namespace anemo {
+namespace gradient {
 
     class DependencyResolver {
     public:

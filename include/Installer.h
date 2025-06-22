@@ -13,14 +13,14 @@
 #include "DependencyResolver.h"
 #include <regex>
 
-namespace anemo {
+namespace gradient {
 
     class Installer {
     public:
         Installer(Database& db,
                   Repository& repo,
                   bool force = false,
-                  const std::string& rootDir = "/",
+                  std::string  rootDir = "/",
                   const std::unordered_set<std::string>& staged = {});
 
         // Install a standalone .apkg archive
@@ -28,7 +28,7 @@ namespace anemo {
 
         // Repo-based operations
         bool installPackage(const std::string& name, const std::string& version);
-        bool removePackage(const std::string& name);
+        bool removePackage(const std::string& name) const;
         bool updatePackage(const std::string& name);
 
     private:
@@ -45,8 +45,8 @@ namespace anemo {
         bool warnings_;
 
         // Helpers
-        std::string detectHostArch();
-        std::string makeTempDir();
+        static std::string detectHostArch();
+        static std::string makeTempDir();
         std::unordered_set<std::string> staged_;
     };
 

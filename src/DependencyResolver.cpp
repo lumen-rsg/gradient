@@ -8,7 +8,7 @@
 #include "Database.h"
 #include "Repository.h"
 
-namespace anemo {
+namespace gradient {
 
     DependencyResolver::DependencyResolver(Database& db, Repository& repo)
         : db_(db), repo_(repo) {}

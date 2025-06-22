@@ -7,7 +7,7 @@
 
 #include <string>
 #include <vector>
-namespace anemo {
+namespace gradient {
     class CLI {
     public:
         CLI(int argc, char* argv[]);

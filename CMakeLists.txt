@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(anemo CXX)
+project(gradient CXX)
 set(CMAKE_CXX_STANDARD 23)
 
 set(CMAKE_CXX_COMPILER clang++)
@@ -28,7 +28,7 @@ link_directories(
 
 enable_testing()
 
-add_executable(anemo
+add_executable(gradient
         src/main.cpp
         src/CLI.cpp
         src/Package.cpp
@@ -45,11 +45,11 @@ add_executable(anemo
         include/DownloadHelper.h
 )
 
-target_link_libraries(anemo
+target_link_libraries(gradient
         yaml-cpp
         ${SQLITE3_LIBRARIES}
         ${CURL_LIBRARIES}
 )
 
 # install target
-install(TARGETS anemo RUNTIME DESTINATION bin)
+install(TARGETS gradient RUNTIME DESTINATION bin)

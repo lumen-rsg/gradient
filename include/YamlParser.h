@@ -8,7 +8,7 @@
 #include <string>
 #include "Package.h"
 
-namespace anemo {
+namespace gradient {
 
     class YamlParser {
     public:

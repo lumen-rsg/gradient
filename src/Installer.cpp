@@ -9,7 +9,9 @@
 #include <filesystem>
 #include <cstdlib>
 #include <iostream>
+#include <ranges>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 #include <regex>
 
@@ -17,26 +19,26 @@
 
 namespace fs = std::filesystem;
 
-namespace anemo {
+namespace gradient {
 
 Installer::Installer(Database& db,
                      Repository& repo,
-                     bool force,
-                     const std::string& rootDir,
+                     const bool force,
+                     std::string rootDir,
                      const std::unordered_set<std::string>& staged)
     : db_(db)
     , repo_(repo)
     , resolver_(db, repo)
     , force_(force)
-    , rootDir_(rootDir)
+    , rootDir_(std::move(rootDir))
     , warnings_(false)
     , staged_ (staged)
 {}
 
 std::string Installer::detectHostArch() {
-    struct utsname u;
+    utsname u{};
     uname(&u);
-    return std::string(u.machine);
+    return {u.machine};
 }
 
 std::string Installer::makeTempDir() {
@@ -44,8 +46,6 @@ std::string Installer::makeTempDir() {
     char* dir = mkdtemp(tmpl);
     return dir ? std::string(dir) : std::string{};
 }
-
-
 
 bool Installer::installArchive(const std::string& archivePath) {
     warnings_ = false;
@@ -59,93 +59,90 @@ bool Installer::installArchive(const std::string& archivePath) {
     auto meta = pkg.metadata();
 
     // 2) Architecture check
-    auto hostArch = detectHostArch();
-    if ((meta.arch != "any" && meta.arch != "all") && meta.arch != hostArch) {
+    if (auto hostArch = detectHostArch(); (meta.arch != "any" && meta.arch != "all") && meta.arch != hostArch) {
         std::cerr << "\033[31merror:\033[0m Arch mismatch: package is '"
                   << meta.arch << "' but host is '" << hostArch << "'.\n";
         return false;
     }
 
     for (const auto& raw_dep : meta.deps) {
-    Tools::Constraint c = Tools::parseConstraint(raw_dep);
-    std::string& dep = c.name;
+        Tools::Constraint c = Tools::parseConstraint(raw_dep);
+        std::string& dep = c.name;
 
-    // skip SONAMEs
-    if (dep.find(".so") != std::string::npos) continue;
+        // skip SONAMEs
+        if (dep.find(".so") != std::string::npos) continue;
 
-    // skip if package itself provides it
-    if (std::find(meta.provides.begin(), meta.provides.end(), dep)
-        != meta.provides.end())
-    {
-        continue;
-    }
-    // skip if any installed pkg Provides it
-    if (db_.isProvided(dep)) continue;
-
-        if (db_.providesSatisfies(c)) {
-            continue;   // dependency is satisfied by some provider at the right version
-        }
-    // skip if staged install
-    if (staged_.count(dep)) continue;
-
-    // if installed, check version
-    std::string instVer;
-    if (db_.getPackageVersion(dep, instVer)) {
-        if (Tools::evalConstraint(instVer, c)) {
-            continue;  // satisfied
-        } else {
-            std::cerr << "\033[33mwarning:\033[0m dependency '"
-                      << raw_dep << "' demands version " << c.op
-                      << c.version << ", but found " << instVer << "\n";
-            if (!force_) {
-                std::cerr << "\033[31merror:\033[0m Aborting due to version mismatch.\n";
-                return false;
-            }
-            warnings_ = true;
+        // skip if package itself provides it
+        if (std::ranges::find(meta.provides, dep)
+            != meta.provides.end())
+        {
             continue;
         }
-    }
+        // skip if any installed pkg Provides it
+        if (db_.isProvided(dep)) continue;
 
-    // not installed at all
-    std::cerr << "\033[33mwarning:\033[0m Missing dependency '"
-              << raw_dep << "'\n";
-    if (!force_) {
-        std::cerr << "\033[31merror:\033[0m Aborting due to missing dependency.\n";
-        return false;
-    }
-    warnings_ = true;
-}
-
-// === 4) Conflicts check with version support ===
-for (const auto& raw_conf : meta.conflicts) {
-    Tools::Constraint c = Tools::parseConstraint(raw_conf);
-    std::string& conf = c.name;
-    std::string instVer;
-    if (db_.getPackageVersion(conf, instVer)) {
-        if (Tools::evalConstraint(instVer, c)) {
-            std::cerr << "\033[33mwarning:\033[0m conflict with installed '"
-                      << raw_conf << "'\n";
-            if (!force_) {
-                std::cerr << "\033[31merror:\033[0m Aborting due to conflict.\n";
-                return false;
+            if (db_.providesSatisfies(c)) {
+                continue;   // dependency is satisfied by some provider at the right version
             }
-            warnings_ = true;
+        // skip if staged install
+        if (staged_.contains(dep)) continue;
+
+        // if installed, check version
+        if (std::string instVer; db_.getPackageVersion(dep, instVer)) {
+            if (Tools::evalConstraint(instVer, c)) {
+                continue;  // satisfied
+            } else {
+                std::cerr << "\033[33mwarning:\033[0m dependency '"
+                          << raw_dep << "' demands version " << c.op
+                          << c.version << ", but found " << instVer << "\n";
+                if (!force_) {
+                    std::cerr << "\033[31merror:\033[0m Aborting due to version mismatch.\n";
+                    return false;
+                }
+                warnings_ = true;
+                continue;
+            }
+        }
+
+        // not installed at all
+        std::cerr << "\033[33mwarning:\033[0m Missing dependency '"
+                  << raw_dep << "'\n";
+        if (!force_) {
+            std::cerr << "\033[31merror:\033[0m Aborting due to missing dependency.\n";
+            return false;
+        }
+        warnings_ = true;
+    }
+
+    // === 4) Conflicts check with version support ===
+    for (const auto& raw_conf : meta.conflicts) {
+        Tools::Constraint c = Tools::parseConstraint(raw_conf);
+        std::string& conf = c.name;
+        if (std::string instVer; db_.getPackageVersion(conf, instVer)) {
+            if (Tools::evalConstraint(instVer, c)) {
+                std::cerr << "\033[33mwarning:\033[0m conflict with installed '"
+                          << raw_conf << "'\n";
+                if (!force_) {
+                    std::cerr << "\033[31merror:\033[0m Aborting due to conflict.\n";
+                    return false;
+                }
+                warnings_ = true;
+            }
         }
     }
-}
 
-// === 5) Replaces logic with version support ===
-for (const auto& raw_rep : meta.replaces) {
-    Tools::Constraint c = Tools::parseConstraint(raw_rep);
-    std::string& rep = c.name;
-    std::string instVer;
-    if (db_.getPackageVersion(rep, instVer) &&
-        Tools::evalConstraint(instVer, c))
-    {
-        std::cout << "\033[32minfo:\033[0m Replacing '" << raw_rep << "'\n";
-        removePackage(rep);
+    // === 5) Replaces logic with version support ===
+    for (const auto& raw_rep : meta.replaces) {
+        Tools::Constraint c = Tools::parseConstraint(raw_rep);
+        std::string& rep = c.name;
+        if (std::string instVer; db_.getPackageVersion(rep, instVer) &&
+                                 Tools::evalConstraint(instVer, c))
+        {
+            std::cout << "\033[32minfo:\033[0m Replacing '" << raw_rep << "'\n";
+            removePackage(rep);
+        }
     }
-}
+
     // 6) Extract entire archive
     auto tmp = makeTempDir();
     if (tmp.empty() || !TarHandler::extract(archivePath, tmp)) {
@@ -178,9 +175,11 @@ for (const auto& raw_rep : meta.replaces) {
     // 8) Prepare for rollback
     std::vector<fs::path> installedFiles;
     auto rollback = [&]() {
-        db_.rollbackTransaction();
-        for (auto it = installedFiles.rbegin(); it != installedFiles.rend(); ++it) {
-            fs::remove(*it);
+        if (!db_.rollbackTransaction()) {
+            std::cerr << "\033[31merror:\033[0m Failed to rollback transaction.\n";
+        }
+        for (auto & installedFile : std::ranges::reverse_view(installedFiles)) {
+            fs::remove(installedFile);
         }
         if (!storedScriptPath.empty()) {
             fs::remove(storedScriptPath);
@@ -217,10 +216,10 @@ for (const auto& raw_rep : meta.replaces) {
 
     // 12) Install files & log them by extracting via tar (preserves symlinks)
     {
-        fs::path pkgRoot = fs::path(tmp) / "package";
-        bool hasFiles = fs::exists(pkgRoot)
-                     && fs::is_directory(pkgRoot)
-                     && !fs::is_empty(pkgRoot);
+        fs::path pkg_root = fs::path(tmp) / "package";
+        bool hasFiles = fs::exists(pkg_root)
+                     && fs::is_directory(pkg_root)
+                     && !fs::is_empty(pkg_root);
 
         if (!hasFiles) {
             std::cerr << "\033[33minfo:\033[0m package contains no files; skipping file installation\n";
@@ -234,7 +233,7 @@ for (const auto& raw_rep : meta.replaces) {
             // -x: extract, -f - : read from stdin, -p: preserve permissions
             // --acls, --xattrs: preserve ACLs and extended attributes
             std::string tarCmd =
-                "tar --acls --xattrs -C '"  + pkgRoot.string()  + "' -cf - . "
+                "tar --acls --xattrs -C '"  + pkg_root.string()  + "' -cf - . "
                 "| "
                 "tar --acls --xattrs -C '"  + rootDir_        + "' -xpf -";
             if (std::system(tarCmd.c_str()) != 0) {
@@ -244,13 +243,13 @@ for (const auto& raw_rep : meta.replaces) {
             }
 
             // (b) Walk pkgRoot to log every regular file and symlink we just installed
-            for (auto& entry : fs::recursive_directory_iterator(pkgRoot)) {
+            for (auto& entry : fs::recursive_directory_iterator(pkg_root)) {
                 if (!fs::is_regular_file(entry.path())
                  && !fs::is_symlink(entry.path()))
                 {
                     continue;
                 }
-                auto rel = fs::relative(entry.path(), pkgRoot);
+                auto rel = fs::relative(entry.path(), pkg_root);
                 // recordPath is absolute on the target system
                 std::string recordPath = (fs::path("/") / rel).string();
                 if (!db_.logFile(meta.name, recordPath)) {
@@ -275,14 +274,12 @@ for (const auto& raw_rep : meta.replaces) {
     // 14) Mark broken if forced with warnings
     if (warnings_ && force_) {
         std::cout << "\033[33mwarning:\033[0m Package installed with warnings; marking as broken.\n";
-        db_.markBroken(meta.name);
+        return db_.markBroken(meta.name);
     }
 
     // 15) Run post-install hook
     if (!storedScriptPath.empty()) {
         ScriptExecutor::runScript(storedScriptPath, "post_install", rootDir_);
-    } else {
-        std::cerr << "\033[33minfo:\033[0m no install.anemonix script found; skipping post-install hook\n";
     }
 
     // 16) Success
@@ -292,7 +289,7 @@ for (const auto& raw_rep : meta.replaces) {
     return true;
 }
 
-bool Installer::removePackage(const std::string& name) {
+bool Installer::removePackage(const std::string& name) const {
     // 1) Check installed
     if (!db_.isInstalled(name, "")) {
         std::cerr << "\033[31merror:\033[0m Package '" << name << "' is not installed.\n";

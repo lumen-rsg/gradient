@@ -106,6 +106,7 @@ namespace gradient {
 
     bool Database::addPackage(const Package::Metadata& meta,
                               const std::string& installScriptPath) const {
+        std::cout << path_ << "\n";
         // 1) Insert/replace into packages
         const auto sql_pkg =
           "INSERT OR REPLACE INTO packages(name,version,arch,install_script) "

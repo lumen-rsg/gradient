@@ -42,7 +42,7 @@ std::string Installer::detectHostArch() {
 }
 
 std::string Installer::makeTempDir() {
-    char tmpl[] = "/tmp/anemoXXXXXX";
+    char tmpl[] = "/tmp/gradientXXXXXX";
     char* dir = mkdtemp(tmpl);
     return dir ? std::string(dir) : std::string{};
 }
@@ -150,7 +150,7 @@ bool Installer::installArchive(const std::string& archivePath) {
         return false;
     }
 
-    // 7) Locate any install.anemonix script under tmp
+    // 7) Locate any install.gradientnix script under tmp
     fs::path scriptSrc;
     for (auto& entry : fs::recursive_directory_iterator(tmp)) {
         if (entry.is_regular_file() &&
@@ -164,7 +164,7 @@ bool Installer::installArchive(const std::string& archivePath) {
     // 7) Persist install script (if present)
     std::string storedScriptPath;
     if (fs::exists(scriptSrc) && fs::is_regular_file(scriptSrc)) {
-        fs::path scriptsDir = fs::path(rootDir_) / "var/lib/anemo/scripts";
+        fs::path scriptsDir = fs::path(rootDir_) / "var/lib/gradient/scripts";
         fs::create_directories(scriptsDir);
         std::string scriptName = meta.name + "-" + meta.version + ".anemonix";
         fs::path scriptDst = scriptsDir / scriptName;
@@ -379,4 +379,4 @@ bool Installer::removePackage(const std::string& name) const {
     return true;
 }
 
-} // namespace anemo
+} // namespace gradient

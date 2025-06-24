@@ -68,9 +68,9 @@ void CLI::run() {
 
     // Prepare bootstrap paths
     std::string rootPrefix = bootstrapDir_.empty() ? "" : bootstrapDir_;
-    if (!rootPrefix.empty()) {
-        rootPrefix.pop_back();
-    }
+    // if (!rootPrefix.empty()) {
+    //     rootPrefix.pop_back();
+    // }
     fs::path dbDir = fs::path(rootPrefix).string() + "/var/lib/gradient/";
     std::error_code ec;
     if (!fs::exists(dbDir)) {
